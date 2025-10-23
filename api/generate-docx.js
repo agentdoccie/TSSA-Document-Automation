@@ -1,41 +1,88 @@
 import { Document, Packer, Paragraph, TextRun } from "docx";
 
-export const config = {
-  runtime: "edge",
-};
+export const config = { runtime: "edge" };
 
 export default async function handler(req) {
   try {
-    const { fullName, witness1, witness2 } = await req.json();
+    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email, signatureDate } = await req.json();
 
-    if (!fullName || !witness1 || !witness2) {
-      return new Response(JSON.stringify({ error: "Missing form fields" }), {
+    if (!fullName || !witness1Name || !witness2Name || !signatureDate) {
+      return new Response(JSON.stringify({ error: "Missing required fields" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    // Create document
     const doc = new Document({
       sections: [
         {
           children: [
+            // Title
+            new Paragraph({
+              children: [new TextRun({ text: "COMMON CARRY DECLARATION", bold: true, size: 28 })],
+              spacing: { after: 400 },
+              alignment: "center",
+            }),
+
+            // Body
             new Paragraph({
               children: [
                 new TextRun({
-                  text: "Common Carry Declaration",
-                  bold: true,
-                  size: 32,
+                  text: `I, ${fullName}, being of sound mind and under full liability, do hereby proclaim and declare that I am lawfully exercising my right to keep and bear arms for the protection of myself, my family, my community, and my property under Natural and Common Law.`,
+                  size: 24,
                 }),
               ],
-              spacing: { after: 300 },
+              spacing: { after: 400 },
             }),
-            new Paragraph(`I, ${fullName}, hereby declare my right to carry arms lawfully.`),
-            new Paragraph(" "),
-            new Paragraph(`Witness 1: ${witness1}`),
-            new Paragraph(`Witness 2: ${witness2}`),
-            new Paragraph(" "),
-            new Paragraph("Signed and witnessed under full liability and penalty of perjury."),
+
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: "This declaration is made freely and voluntarily, without coercion, and stands as a lawful notice to all foreign entities, corporations, or agents that any interference with this right is a trespass upon my inherent liberties.",
+                  size: 24,
+                }),
+              ],
+              spacing: { after: 400 },
+            }),
+
+            // Signature section
+            new Paragraph({
+              children: [new TextRun({ text: "Declared this " + signatureDate + ".", size: 24 })],
+              spacing: { after: 600 },
+            }),
+
+            new Paragraph({
+              children: [new TextRun({ text: "Autograph of Declarant: _________________________", size: 24 })],
+              spacing: { after: 600 },
+            }),
+
+            // Witness 1
+            new Paragraph({ children: [new TextRun({ text: "Witness 1 (Printed Name): " + witness1Name, size: 24 })] }),
+            new Paragraph({ children: [new TextRun({ text: "Email: " + (witness1Email || ""), size: 24 })] }),
+            new Paragraph({
+              children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
+              spacing: { after: 400 },
+            }),
+
+            // Witness 2
+            new Paragraph({ children: [new TextRun({ text: "Witness 2 (Printed Name): " + witness2Name, size: 24 })] }),
+            new Paragraph({ children: [new TextRun({ text: "Email: " + (witness2Email || ""), size: 24 })] }),
+            new Paragraph({
+              children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
+              spacing: { after: 400 },
+            }),
+
+            // Footer
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: "This document is executed under Common Law jurisdiction — All Rights Reserved.",
+                  italics: true,
+                  size: 22,
+                }),
+              ],
+              alignment: "center",
+            }),
           ],
         },
       ],
