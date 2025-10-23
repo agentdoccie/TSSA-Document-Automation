@@ -1,14 +1,12 @@
-// ✅ TSSA Document Automation — Common Carry Declaration Generator
-// Clean, stable, and production-ready for Vercel (Node.js runtime)
+// ✅ FINAL FIXED VERSION — TSSA Common Carry Declaration Generator
+// Works cleanly with Vercel + docx, no pattern errors.
 
 import { Document, Packer, Paragraph, TextRun } from "docx";
 
-// Ensure this runs in Node.js, not Edge
 export const config = { runtime: "nodejs" };
 
 export default async function handler(req) {
   try {
-    // Parse incoming JSON data from form
     const {
       fullName = "",
       witness1Name = "",
@@ -18,7 +16,6 @@ export default async function handler(req) {
       signatureDate = new Date().toLocaleDateString(),
     } = await req.json();
 
-    // Validate required fields
     if (!fullName || !witness1Name || !witness2Name) {
       return new Response(JSON.stringify({ error: "Missing required fields" }), {
         status: 400,
@@ -26,15 +23,12 @@ export default async function handler(req) {
       });
     }
 
-    // Helper function to sanitize input
     const safe = (t) => (typeof t === "string" ? t.trim() : "");
 
-    // 📝 Create the Word document
     const doc = new Document({
       sections: [
         {
           children: [
-            // Title
             new Paragraph({
               children: [
                 new TextRun({
@@ -47,7 +41,6 @@ export default async function handler(req) {
               spacing: { after: 400 },
             }),
 
-            // Declaration body
             new Paragraph({
               children: [
                 new TextRun({
@@ -78,36 +71,64 @@ export default async function handler(req) {
               spacing: { after: 400 },
             }),
 
-            // Witness section
             new Paragraph({
-              children: [new TextRun({ text: "Witness 1:", bold: true, size: 24 })],
+              children: [
+                new TextRun({
+                  text: "Witness 1:",
+                  bold: true,
+                  size: 24,
+                }),
+              ],
             }),
             new Paragraph({
-              children: [new TextRun({ text: `Name: ${safe(witness1Name)}`, size: 24 })],
+              children: [
+                new TextRun({ text: `Name: ${safe(witness1Name)}`, size: 24 }),
+              ],
             }),
             new Paragraph({
-              children: [new TextRun({ text: `Email: ${safe(witness1Email)}`, size: 24 })],
+              children: [
+                new TextRun({ text: `Email: ${safe(witness1Email)}`, size: 24 }),
+              ],
             }),
             new Paragraph({
-              children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
+              children: [
+                new TextRun({
+                  text: "Autograph: _________________________",
+                  size: 24,
+                }),
+              ],
               spacing: { after: 200 },
             }),
 
             new Paragraph({
-              children: [new TextRun({ text: "Witness 2:", bold: true, size: 24 })],
+              children: [
+                new TextRun({
+                  text: "Witness 2:",
+                  bold: true,
+                  size: 24,
+                }),
+              ],
             }),
             new Paragraph({
-              children: [new TextRun({ text: `Name: ${safe(witness2Name)}`, size: 24 })],
+              children: [
+                new TextRun({ text: `Name: ${safe(witness2Name)}`, size: 24 }),
+              ],
             }),
             new Paragraph({
-              children: [new TextRun({ text: `Email: ${safe(witness2Email)}`, size: 24 })],
+              children: [
+                new TextRun({ text: `Email: ${safe(witness2Email)}`, size: 24 }),
+              ],
             }),
             new Paragraph({
-              children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
+              children: [
+                new TextRun({
+                  text: "Autograph: _________________________",
+                  size: 24,
+                }),
+              ],
               spacing: { after: 400 },
             }),
 
-            // Footer
             new Paragraph({
               children: [
                 new TextRun({
@@ -123,10 +144,8 @@ export default async function handler(req) {
       ],
     });
 
-    // 📦 Convert document to a downloadable buffer
     const buffer = await Packer.toBuffer(doc);
 
-    // ✅ Return downloadable file response
     return new Response(buffer, {
       status: 200,
       headers: {
