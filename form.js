@@ -11,7 +11,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const witness2Email = document.querySelector("#witness2Email").value;
 
     try {
-      const res = await fetch("/api/generate-docx", {
+      const res = await fetch("/api/generate-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
