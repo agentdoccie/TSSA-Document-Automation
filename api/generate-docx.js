@@ -1,7 +1,13 @@
 // ✅ FINAL FIXED VERSION — TSSA Common Carry Declaration Generator
 // Works cleanly with Vercel + docx, no pattern errors.
 
-import { Document, Packer, Paragraph, TextRun } from "docx";
+import {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  AlignmentType,
+} from "docx";
 
 export const config = { runtime: "nodejs" };
 
@@ -37,14 +43,16 @@ export default async function handler(req) {
                   size: 28,
                 }),
               ],
-              alignment: "center",
+              alignment: AlignmentType.CENTER, // ✅ FIXED HERE
               spacing: { after: 400 },
             }),
 
             new Paragraph({
               children: [
                 new TextRun({
-                  text: `I, ${safe(fullName)}, being of sound mind and body, do hereby declare and record my unalienable right to keep and bear arms — to Common Carry — as guaranteed by Natural Law and reaffirmed in Public Law.`,
+                  text: `I, ${safe(
+                    fullName
+                  )}, being of sound mind and body, do hereby declare and record my unalienable right to keep and bear arms — to Common Carry — as guaranteed by Natural Law and reaffirmed in Public Law.`,
                   size: 24,
                 }),
               ],
@@ -72,23 +80,13 @@ export default async function handler(req) {
             }),
 
             new Paragraph({
-              children: [
-                new TextRun({
-                  text: "Witness 1:",
-                  bold: true,
-                  size: 24,
-                }),
-              ],
+              children: [new TextRun({ text: "Witness 1:", bold: true, size: 24 })],
             }),
             new Paragraph({
-              children: [
-                new TextRun({ text: `Name: ${safe(witness1Name)}`, size: 24 }),
-              ],
+              children: [new TextRun({ text: `Name: ${safe(witness1Name)}`, size: 24 })],
             }),
             new Paragraph({
-              children: [
-                new TextRun({ text: `Email: ${safe(witness1Email)}`, size: 24 }),
-              ],
+              children: [new TextRun({ text: `Email: ${safe(witness1Email)}`, size: 24 })],
             }),
             new Paragraph({
               children: [
@@ -101,23 +99,13 @@ export default async function handler(req) {
             }),
 
             new Paragraph({
-              children: [
-                new TextRun({
-                  text: "Witness 2:",
-                  bold: true,
-                  size: 24,
-                }),
-              ],
+              children: [new TextRun({ text: "Witness 2:", bold: true, size: 24 })],
             }),
             new Paragraph({
-              children: [
-                new TextRun({ text: `Name: ${safe(witness2Name)}`, size: 24 }),
-              ],
+              children: [new TextRun({ text: `Name: ${safe(witness2Name)}`, size: 24 })],
             }),
             new Paragraph({
-              children: [
-                new TextRun({ text: `Email: ${safe(witness2Email)}`, size: 24 }),
-              ],
+              children: [new TextRun({ text: `Email: ${safe(witness2Email)}`, size: 24 })],
             }),
             new Paragraph({
               children: [
@@ -137,7 +125,7 @@ export default async function handler(req) {
                   size: 20,
                 }),
               ],
-              alignment: "center",
+              alignment: AlignmentType.CENTER, // ✅ FIXED HERE TOO
             }),
           ],
         },
