@@ -8,6 +8,8 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "docx": "^8.5.0"
+    "docxtemplater": "^3.39.1",
+    "pizzip": "^3.2.2",
+    "cloudconvert": "^3.0.4"
   }
 }
