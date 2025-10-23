@@ -1,37 +1,47 @@
-document.getElementById('documentForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
+// ✅ SAFE VERSION — Works on Vercel with Node.js API routes
+document.addEventListener("DOMContentLoaded", () => {
+  const form = document.querySelector("form");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
 
-  const fullName = document.getElementById('fullName').value.trim();
-  const witness1 = document.getElementById('witness1').value.trim();
-  const witness2 = document.getElementById('witness2').value.trim();
+    const fullName = document.querySelector("#fullName").value;
+    const witness1Name = document.querySelector("#witness1Name").value;
+    const witness1Email = document.querySelector("#witness1Email").value;
+    const witness2Name = document.querySelector("#witness2Name").value;
+    const witness2Email = document.querySelector("#witness2Email").value;
 
-  const statusMessage = document.getElementById('statusMessage');
-  statusMessage.textContent = "Generating your document... please wait.";
+    try {
+      const res = await fetch("/api/generate-docx", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName,
+          witness1Name,
+          witness1Email,
+          witness2Name,
+          witness2Email,
+        }),
+      });
 
-  try {
-  const response = await fetch('/api/generate-docx', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fullName, witness1, witness2 })
-    });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to generate document");
+      }
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to generate document.');
+      // Download the file
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${fullName || "CommonCarry"}_Declaration.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      document.querySelector("#error").innerHTML =
+        "❌ Error: " + err.message;
     }
-
-    const text = await response.text();
-
-    // Create downloadable file
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${fullName.replace(/\s+/g, '_')}_Common_Carry_Declaration.txt`;
-    link.click();
-
-    statusMessage.textContent = "✅ Document generated and downloaded successfully!";
-  } catch (err) {
-    statusMessage.textContent = `❌ Error: ${err.message}`;
-  }
+  });
 });
