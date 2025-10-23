@@ -1,14 +1,21 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TSSA Document Automation</title>
-    <link rel="stylesheet" href="style.css">
-</head>
 <body>
-    <h1>TSSA Document Automation Portal</h1>
-    <p>Welcome to The South African Assembly Document Automation Portal</p>
-    <script src="form.js"></script>
+  <h1>TSSA Document Automation Portal</h1>
+  <p>Fill out the form below to generate your Common Carry Declaration.</p>
+
+  <form id="documentForm">
+    <label for="fullName">Full Name:</label><br>
+    <input type="text" id="fullName" name="fullName" required><br><br>
+
+    <label for="witness1">Witness 1 (Name):</label><br>
+    <input type="text" id="witness1" name="witness1" required><br><br>
+
+    <label for="witness2">Witness 2 (Name):</label><br>
+    <input type="text" id="witness2" name="witness2" required><br><br>
+
+    <button type="submit">Generate Document</button>
+  </form>
+
+  <p id="statusMessage"></p>
+
+  <script src="form.js"></script>
 </body>
-</html>
