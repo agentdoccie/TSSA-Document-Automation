@@ -1,0 +1,13 @@
+{
+  "name": "tssa-document-automation",
+  "version": "1.0.0",
+  "description": "TSSA Document Automation Portal",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "docx": "^8.5.0"
+  }
+}
