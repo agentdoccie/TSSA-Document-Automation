@@ -1,108 +1,84 @@
-// TSSA — Fill DOCX template and return PDF
-// Uses docxtemplater (fill placeholders) + CloudConvert (docx->pdf)
-
+// ✅ TSSA — Generate PDF from DOCX template (fixed and clean version)
 import fs from "fs/promises";
 import path from "path";
-import Docxtemplater from "docxtemplater";
 import PizZip from "pizzip";
+import Docxtemplater from "docxtemplater";
 import CloudConvert from "cloudconvert";
 
 export const config = { runtime: "nodejs" };
 
+// Get your API key from environment
 const cloudconvertApiKey = process.env.CLOUDCONVERT_API_KEY;
+const cloudconvert = new CloudConvert(cloudconvertApiKey);
 
-// Small helper to read the raw body in Node runtime (no req.json here)
+// Helper: read body of POST request
 async function readJsonBody(req) {
   const chunks = [];
-  for await (const c of req) chunks.push(c);
+  for await (const chunk of req) chunks.push(chunk);
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
-      res.status(405).json({ error: "Method not allowed" });
-      return;
+      return res.status(405).json({ error: "Method not allowed" });
     }
 
-    // 1) Parse input
+    // Parse incoming data
     const body = await readJsonBody(req);
-    const safe = (t) => (typeof t === "string" ? t.trim() : "");
-    const data = {
-      FULL_NAME: safe(body.fullName),
-      WITNESS1_NAME: safe(body.witness1Name),
-      WITNESS1_EMAIL: safe(body.witness1Email || ""),
-      WITNESS2_NAME: safe(body.witness2Name),
-      WITNESS2_EMAIL: safe(body.witness2Email || ""),
-      SIGNATURE_DATE: safe(body.signatureDate || new Date().toLocaleDateString())
-    };
+    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = body;
 
-    if (!data.FULL_NAME || !data.WITNESS1_NAME || !data.WITNESS2_NAME) {
-      res.status(400).json({ error: "Missing required fields" });
-      return;
-    }
-
-    // 2) Load the .docx template from /templates
+    // 1️⃣ Load DOCX template
     const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
-    const templateBinary = await fs.readFile(templatePath, "binary");
+    const content = await fs.readFile(templatePath, "binary");
 
-    // 3) Fill placeholders
-    const zip = new PizZip(templateBinary);
+    // 2️⃣ Fill placeholders using Docxtemplater
+    const zip = new PizZip(content);
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
-    doc.setData(data);
-    doc.render(); // throws if a placeholder is missing
-    const filledDocxBuffer = doc.getZip().generate({ type: "nodebuffer" });
 
-    // 4) Convert DOCX -> PDF via CloudConvert (needs API key in Vercel)
-    if (!cloudconvertApiKey) {
-      // Fallback: return DOCX if no API key configured
-      res.setHeader(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      );
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${data.FULL_NAME.replace(/\s+/g, "_")}_Declaration.docx"`
-      );
-      res.status(200).send(filledDocxBuffer);
-      return;
-    }
+    doc.render({
+      FULL_NAME: fullName || "",
+      WITNESS_1_NAME: witness1Name || "",
+      WITNESS_1_EMAIL: witness1Email || "",
+      WITNESS_2_NAME: witness2Name || "",
+      WITNESS_2_EMAIL: witness2Email || "",
+      SIGNATURE_DATE: new Date().toLocaleDateString("en-US")
+    });
 
-    const cloudConvert = new CloudConvert(cloudconvertApiKey);
+    const filledBuffer = doc.getZip().generate({ type: "nodebuffer" });
 
-    // Create job: upload -> convert -> export URL
-    const job = await cloudConvert.jobs.create({
+    // 3️⃣ Upload to CloudConvert and convert DOCX → PDF
+    const job = await cloudconvert.jobs.create({
       tasks: {
-        "import-file": { operation: "import/upload" },
-        convert: {
+        import_myfile: {
+          operation: "import/base64",
+          file: filledBuffer.toString("base64"),
+          filename: "CommonCarryDeclaration.docx"
+        },
+        convert_myfile: {
           operation: "convert",
-          input: "import-file",
+          input: ["import_myfile"],
           input_format: "docx",
           output_format: "pdf"
         },
-        "export-url": { operation: "export/url", input: "convert" }
+        export_myfile: {
+          operation: "export/url",
+          input: ["convert_myfile"]
+        }
       }
     });
 
-    const importTask = job.tasks.find((t) => t.name === "import-file");
-    await cloudConvert.tasks.upload(importTask, filledDocxBuffer, "filled.docx");
+    const jobResult = await cloudconvert.jobs.wait(job.id);
+    const fileUrl = jobResult.tasks.find(t => t.name === "export_myfile").result.files[0].url;
 
-    const done = await cloudConvert.jobs.wait(job.id);
-    const exportTask = done.tasks.find((t) => t.name === "export-url" && t.status === "finished");
-    const file = exportTask.result.files[0];
+    // 4️⃣ Return URL to client
+    res.status(200).json({ success: true, pdfUrl: fileUrl });
 
-    // Fetch the PDF bytes from CloudConvert’s temporary URL
-    const resp = await fetch(file.url);
-    const arrayBuffer = await resp.arrayBuffer();
-    const pdfBuffer = Buffer.from(arrayBuffer);
-
-    // 5) Return PDF
-    const filename = `${data.FULL_NAME.replace(/\s+/g, "_")}_Declaration.pdf`;
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.status(200).send(pdfBuffer);
-  } catch (err) {
-    console.error("PDF generation error:", err);
-    res.status(500).json({ error: err?.message || String(err) });
+  } catch (error) {
+    console.error("Full error:", error);
+    res.status(500).json({
+      error: error.message || "Unknown error",
+      stack: error.stack || null,
+    });
   }
 }
