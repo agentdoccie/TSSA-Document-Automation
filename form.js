@@ -9,7 +9,7 @@ document.getElementById('documentForm').addEventListener('submit', async (e) => 
   statusMessage.textContent = "Generating your document... please wait.";
 
   try {
-    const response = await fetch('/api/generate', {
+  const response = await fetch('/api/generate-docx', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fullName, witness1, witness2 })
