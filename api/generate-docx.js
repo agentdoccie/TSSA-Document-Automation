@@ -1,72 +1,107 @@
+// ✅ TSSA Document Automation — Common Carry Declaration Generator
+// Clean, stable, and production-ready for Vercel (Node.js runtime)
+
 import { Document, Packer, Paragraph, TextRun } from "docx";
 
+// Ensure this runs in Node.js, not Edge
 export const config = { runtime: "nodejs" };
 
 export default async function handler(req) {
   try {
-    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email, signatureDate } = await req.json();
+    // Parse incoming JSON data from form
+    const {
+      fullName = "",
+      witness1Name = "",
+      witness1Email = "",
+      witness2Name = "",
+      witness2Email = "",
+      signatureDate = new Date().toLocaleDateString(),
+    } = await req.json();
 
-    if (!fullName || !witness1Name || !witness2Name || !signatureDate) {
+    // Validate required fields
+    if (!fullName || !witness1Name || !witness2Name) {
       return new Response(JSON.stringify({ error: "Missing required fields" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
 
+    // Helper function to sanitize input
+    const safe = (t) => (typeof t === "string" ? t.trim() : "");
+
+    // 📝 Create the Word document
     const doc = new Document({
       sections: [
         {
           children: [
             // Title
             new Paragraph({
-              children: [new TextRun({ text: "COMMON CARRY DECLARATION", bold: true, size: 28 })],
-              spacing: { after: 400 },
+              children: [
+                new TextRun({
+                  text: "COMMON CARRY DECLARATION",
+                  bold: true,
+                  size: 28,
+                }),
+              ],
               alignment: "center",
+              spacing: { after: 400 },
             }),
 
-            // Body
+            // Declaration body
             new Paragraph({
               children: [
                 new TextRun({
-                  text: `I, ${fullName}, being of sound mind and under full liability, do hereby proclaim and declare that I am lawfully exercising my right to keep and bear arms for the protection of myself, my family, my community, and my property under Natural and Common Law.`,
+                  text: `I, ${safe(fullName)}, being of sound mind and body, do hereby declare and record my unalienable right to keep and bear arms — to Common Carry — as guaranteed by Natural Law and reaffirmed in Public Law.`,
+                  size: 24,
+                }),
+              ],
+              spacing: { after: 300 },
+            }),
+
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: "This Declaration stands as my public record of intent to live peaceably, to defend life, liberty, and property, and to uphold the Public Law of the Land.",
+                  size: 24,
+                }),
+              ],
+              spacing: { after: 300 },
+            }),
+
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: `Signed and declared this day of ${safe(signatureDate)}.`,
                   size: 24,
                 }),
               ],
               spacing: { after: 400 },
             }),
 
+            // Witness section
             new Paragraph({
-              children: [
-                new TextRun({
-                  text: "This declaration is made freely and voluntarily, without coercion, and stands as a lawful notice to all foreign entities, corporations, or agents that any interference with this right is a trespass upon my inherent liberties.",
-                  size: 24,
-                }),
-              ],
-              spacing: { after: 400 },
+              children: [new TextRun({ text: "Witness 1:", bold: true, size: 24 })],
             }),
-
-            // Signature section
             new Paragraph({
-              children: [new TextRun({ text: "Declared this " + signatureDate + ".", size: 24 })],
-              spacing: { after: 600 },
+              children: [new TextRun({ text: `Name: ${safe(witness1Name)}`, size: 24 })],
             }),
-
             new Paragraph({
-              children: [new TextRun({ text: "Autograph of Declarant: _________________________", size: 24 })],
-              spacing: { after: 600 },
+              children: [new TextRun({ text: `Email: ${safe(witness1Email)}`, size: 24 })],
             }),
-
-            // Witness 1
-            new Paragraph({ children: [new TextRun({ text: "Witness 1 (Printed Name): " + witness1Name, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: "Email: " + (witness1Email || ""), size: 24 })] }),
             new Paragraph({
               children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
-              spacing: { after: 400 },
+              spacing: { after: 200 },
             }),
 
-            // Witness 2
-            new Paragraph({ children: [new TextRun({ text: "Witness 2 (Printed Name): " + witness2Name, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: "Email: " + (witness2Email || ""), size: 24 })] }),
+            new Paragraph({
+              children: [new TextRun({ text: "Witness 2:", bold: true, size: 24 })],
+            }),
+            new Paragraph({
+              children: [new TextRun({ text: `Name: ${safe(witness2Name)}`, size: 24 })],
+            }),
+            new Paragraph({
+              children: [new TextRun({ text: `Email: ${safe(witness2Email)}`, size: 24 })],
+            }),
             new Paragraph({
               children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
               spacing: { after: 400 },
@@ -76,9 +111,9 @@ export default async function handler(req) {
             new Paragraph({
               children: [
                 new TextRun({
-                  text: "This document is executed under Common Law jurisdiction — All Rights Reserved.",
+                  text: "Generated automatically by the TSSA Document Automation System",
                   italics: true,
-                  size: 22,
+                  size: 20,
                 }),
               ],
               alignment: "center",
@@ -88,18 +123,22 @@ export default async function handler(req) {
       ],
     });
 
-    const blob = await Packer.toBlob(doc);
-    const arrayBuffer = await blob.arrayBuffer();
+    // 📦 Convert document to a downloadable buffer
+    const buffer = await Packer.toBuffer(doc);
 
-    return new Response(arrayBuffer, {
+    // ✅ Return downloadable file response
+    return new Response(buffer, {
       status: 200,
       headers: {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "Content-Disposition": `attachment; filename="${fullName.replace(/\s+/g, "_")}_Common_Carry_Declaration.docx"`,
+        "Content-Disposition": `attachment; filename="${safe(
+          fullName
+        )}_Common_Carry_Declaration.docx"`,
       },
     });
   } catch (err) {
+    console.error("Error generating document:", err);
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
