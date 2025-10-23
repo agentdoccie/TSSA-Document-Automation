@@ -1,88 +1,106 @@
-// ✅ SAFE FINAL VERSION — fixes “expected pattern” error
+// ✅ FINAL FIXED VERSION — Works on Vercel with Node.js runtime (no req.json error)
+
 import { Document, Packer, Paragraph, TextRun } from "docx";
 
 export const config = { runtime: "nodejs" };
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   try {
-    const data = await req.json();
-    const safe = (t) => (t && typeof t === "string" ? t.trim() : "");
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
 
-    const fullName = safe(data.fullName);
-    const witness1Name = safe(data.witness1Name);
-    const witness1Email = safe(data.witness1Email);
-    const witness2Name = safe(data.witness2Name);
-    const witness2Email = safe(data.witness2Email);
-    const signatureDate = new Date().toLocaleDateString();
+    // ✅ FIX: manually parse request body
+    const buffers = [];
+    for await (const chunk of req) {
+      buffers.push(chunk);
+    }
+    const data = JSON.parse(Buffer.concat(buffers).toString());
+
+    const {
+      fullName = "",
+      witness1Name = "",
+      witness1Email = "",
+      witness2Name = "",
+      witness2Email = "",
+      signatureDate = new Date().toLocaleDateString(),
+    } = data;
 
     if (!fullName || !witness1Name || !witness2Name) {
-      return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      res.status(400).json({ error: "Missing required fields" });
+      return;
     }
+
+    const safe = (t) => (typeof t === "string" ? t.trim() : "");
 
     const doc = new Document({
       sections: [
         {
           children: [
             new Paragraph({
-              alignment: "center",
-              spacing: { after: 400 },
               children: [
                 new TextRun({
                   text: "COMMON CARRY DECLARATION",
                   bold: true,
-                  size: 32,
+                  size: 28,
                 }),
               ],
+              alignment: "center",
+              spacing: { after: 400 },
             }),
 
             new Paragraph({
-              spacing: { after: 300 },
               children: [
                 new TextRun({
-                  text: `I, ${fullName}, being of sound mind and body, do hereby declare and record my unalienable right to keep and bear arms — to Common Carry — as guaranteed by Natural Law and reaffirmed in Public Law.`,
+                  text: `I, ${safe(fullName)}, being of sound mind and body, do hereby declare and record my unalienable right to keep and bear arms — to Common Carry — as guaranteed by Natural Law and reaffirmed in Public Law.`,
                   size: 24,
                 }),
               ],
+              spacing: { after: 300 },
             }),
 
             new Paragraph({
-              spacing: { after: 300 },
               children: [
                 new TextRun({
                   text: "This Declaration stands as my public record of intent to live peaceably, to defend life, liberty, and property, and to uphold the Public Law of the Land.",
                   size: 24,
                 }),
               ],
+              spacing: { after: 300 },
             }),
 
             new Paragraph({
-              spacing: { after: 400 },
               children: [
                 new TextRun({
-                  text: `Signed and declared this day of ${signatureDate}.`,
+                  text: `Signed and declared this day of ${safe(signatureDate)}.`,
                   size: 24,
                 }),
               ],
+              spacing: { after: 400 },
             }),
 
-            new Paragraph({ children: [new TextRun({ text: "Witness 1:", bold: true, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: `Name: ${witness1Name}`, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: `Email: ${witness1Email}`, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: "Autograph: _________________________", size: 24 })], spacing: { after: 200 } }),
-
-            new Paragraph({ children: [new TextRun({ text: "Witness 2:", bold: true, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: `Name: ${witness2Name}`, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: `Email: ${witness2Email}`, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: "Autograph: _________________________", size: 24 })], spacing: { after: 400 } }),
+            new Paragraph({
+              children: [new TextRun({ text: "Witness 1:", bold: true, size: 24 })],
+            }),
+            new Paragraph({ children: [new TextRun({ text: `Name: ${safe(witness1Name)}`, size: 24 })] }),
+            new Paragraph({ children: [new TextRun({ text: `Email: ${safe(witness1Email)}`, size: 24 })] }),
+            new Paragraph({
+              children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
+              spacing: { after: 200 },
+            }),
 
             new Paragraph({
-              alignment: "center",
+              children: [new TextRun({ text: "Witness 2:", bold: true, size: 24 })],
+            }),
+            new Paragraph({ children: [new TextRun({ text: `Name: ${safe(witness2Name)}`, size: 24 })] }),
+            new Paragraph({ children: [new TextRun({ text: `Email: ${safe(witness2Email)}`, size: 24 })] }),
+            new Paragraph({
+              children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
+              spacing: { after: 400 },
+            }),
+
+            new Paragraph({
               children: [
                 new TextRun({
                   text: "Generated automatically by the TSSA Document Automation System",
@@ -90,6 +108,7 @@ export default async function handler(req) {
                   size: 20,
                 }),
               ],
+              alignment: "center",
             }),
           ],
         },
@@ -98,21 +117,18 @@ export default async function handler(req) {
 
     const buffer = await Packer.toBuffer(doc);
 
-    return new Response(buffer, {
-      status: 200,
-      headers: {
-        "Content-Type":
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "Content-Disposition": `attachment; filename="${fullName
-          .replace(/\s+/g, "_")
-          .toLowerCase()}_Common_Carry_Declaration.docx"`,
-      },
-    });
+    // ✅ send as downloadable DOCX
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${safe(fullName)}_Common_Carry_Declaration.docx"`
+    );
+    res.status(200).send(buffer);
   } catch (err) {
     console.error("Error generating document:", err);
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    res.status(500).json({ error: err.message });
   }
 }
