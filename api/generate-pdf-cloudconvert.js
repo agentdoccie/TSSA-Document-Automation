@@ -1,94 +1,139 @@
-// File: /api/generate-pdf-cloudconvert.js
 import fs from "fs";
 import path from "path";
-import { promisify } from "util";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import CloudConvert from "cloudconvert";
 
-const readFile = promisify(fs.readFile);
+// Initialize CloudConvert
 const cloudConvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY);
 
-async function runWatchdog(fileName) {
-  try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/watchdog-template`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName }),
-    });
-    const result = await response.json();
-    if (result?.ok && result.repairedTemplate) {
-      console.log("🛠 Watchdog repaired template:", result.repairedTemplate);
-      return path.join(process.cwd(), "temp", result.repairedTemplate);
+// --- Helper function: Auto-scan and repair template placeholders ---
+function autoRepairTemplate(content) {
+  const correctTags = {
+    FULL_NAME: "fullName",
+    WITNESS_1_NAME: "witness1Name",
+    WITNESS_1_EMAIL: "witness1Email",
+    WITNESS_2_NAME: "witness2Name",
+    WITNESS_2_EMAIL: "witness2Email",
+    SIGNATURE_DATE: "signatureDate"
+  };
+
+  let repairedContent = content;
+  let replacements = [];
+
+  for (const [wrongTag, rightTag] of Object.entries(correctTags)) {
+    const regex = new RegExp(`{{\\s*${wrongTag}\\s*}}`, "g");
+    if (regex.test(repairedContent)) {
+      repairedContent = repairedContent.replace(regex, `{{${rightTag}}}`);
+      replacements.push({ from: wrongTag, to: rightTag });
     }
-  } catch (err) {
-    console.warn("⚠️ Watchdog skipped:", err.message);
   }
-  return path.join(process.cwd(), "templates", fileName);
+
+  return { repairedContent, replacements };
 }
 
+// --- Main API route ---
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, error: "Method Not Allowed" });
   }
 
   try {
-    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body;
-    const templateFile = "CommonCarryDeclaration.docx";
-    const templatePath = await runWatchdog(templateFile);
+    // 1️⃣ Collect form data
+    const {
+      fullName,
+      witness1Name,
+      witness1Email,
+      witness2Name,
+      witness2Email
+    } = req.body;
 
+    // 2️⃣ Load template
+    const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
     if (!fs.existsSync(templatePath)) {
-      return res.status(404).json({ ok: false, error: "Template not found after watchdog repair." });
+      return res.status(404).json({ ok: false, error: "Template not found" });
     }
 
-    const content = await readFile(templatePath, "binary");
-    const zip = new PizZip(content);
+    let content = fs.readFileSync(templatePath, "utf8");
+
+    // 3️⃣ Auto-repair placeholders before rendering
+    const { repairedContent, replacements } = autoRepairTemplate(content);
+    if (replacements.length > 0) {
+      const fixedPath = templatePath.replace(".docx", "_fixed.docx");
+      fs.writeFileSync(fixedPath, repairedContent, "utf8");
+      console.log(`✅ Auto-repaired and saved fixed version: ${fixedPath}`);
+    }
+
+    // 4️⃣ Render DOCX
+    const zip = new PizZip(repairedContent);
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
 
-    // Fallback-safe rendering
-    try {
-      doc.render({
-        fullName: fullName || "[MISSING fullName]",
-        witness1Name: witness1Name || "[MISSING witness1Name]",
-        witness1Email: witness1Email || "[MISSING witness1Email]",
-        witness2Name: witness2Name || "[MISSING witness2Name]",
-        witness2Email: witness2Email || "[MISSING witness2Email]",
-        signatureDate: new Date().toLocaleDateString(),
-      });
-    } catch (e) {
-      console.warn("⚠️ Template render error, fallback applied:", e.message);
-    }
+    doc.render({
+      fullName,
+      witness1Name,
+      witness1Email,
+      witness2Name,
+      witness2Email,
+      signatureDate: new Date().toLocaleDateString()
+    });
 
     const buffer = doc.getZip().generate({ type: "nodebuffer" });
+    const outputDocxPath = path.join(process.cwd(), "temp", "CommonCarryDeclaration_output.docx");
+    fs.writeFileSync(outputDocxPath, buffer);
 
-    // Upload DOCX → convert → export URL
-    const job = await cloudConvert.jobs.create({
-      tasks: {
-        importUpload: { operation: "import/upload" },
-        convert: { operation: "convert", input: "importUpload", input_format: "docx", output_format: "pdf" },
-        exportUrl: { operation: "export/url", input: "convert" },
-      },
-    });
+    // 5️⃣ Try to convert DOCX → PDF
+    try {
+      const job = await cloudConvert.jobs.create({
+        tasks: {
+          "import-my-file": {
+            operation: "import/upload"
+          },
+          "convert-my-file": {
+            operation: "convert",
+            input: "import-my-file",
+            input_format: "docx",
+            output_format: "pdf"
+          },
+          "export-my-file": {
+            operation: "export/url",
+            input: "convert-my-file"
+          }
+        }
+      });
 
-    const uploadTask = job.tasks.find(t => t.name === "importUpload");
-    await cloudConvert.tasks.upload(uploadTask, buffer);
+      const uploadTask = job.tasks.find(task => task.name === "import-my-file");
+      const uploadUrl = uploadTask.result.form.url;
+      const formData = new FormData();
 
-    const completedJob = await cloudConvert.jobs.wait(job.id);
-    const exportTask = completedJob.tasks.find(t => t.operation === "export/url");
-    const pdfUrl = exportTask.result.files[0].url;
+      for (const [key, value] of Object.entries(uploadTask.result.form.parameters)) {
+        formData.append(key, value);
+      }
+      formData.append("file", fs.createReadStream(outputDocxPath));
 
-    return res.status(200).json({
-      ok: true,
-      message: "✅ PDF generated (with watchdog pre-check)",
-      fileUrl: pdfUrl,
-    });
-  } catch (error) {
-    console.error("❌ PDF generation fallback triggered:", error);
-    return res.status(200).json({
-      ok: true,
-      message: "⚠️ PDF conversion failed — fallback to DOCX only.",
-      error: error.message,
-      fallback: "docx",
-    });
+      await fetch(uploadUrl, { method: "POST", body: formData });
+
+      const completedJob = await cloudConvert.jobs.wait(job.id);
+      const exportTask = completedJob.tasks.find(task => task.name === "export-my-file");
+      const fileUrl = exportTask.result.files[0].url;
+
+      return res.status(200).json({
+        ok: true,
+        message: "✅ PDF generated successfully (auto-repaired).",
+        fileUrl,
+        replacements
+      });
+    } catch (pdfErr) {
+      console.warn("⚠️ PDF conversion failed, fallback to DOCX.", pdfErr.message);
+
+      return res.status(200).json({
+        ok: true,
+        message: "⚠️ PDF conversion failed — fallback to DOCX only.",
+        fallback: "docx",
+        replacements
+      });
+    }
+  } catch (err) {
+    console.error("Unhandled generator error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 }
