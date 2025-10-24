@@ -1,120 +1,127 @@
-// File: /api/generate-pdf.js
+// ======= /api/generate-pdf.js =======
+
 import fs from "fs";
 import path from "path";
-import { promisify } from "util";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
+import { execSync } from "child_process"; // optional local PDF fallback (LibreOffice)
 
-const readFile = promisify(fs.readFile);
-const writeFile = promisify(fs.writeFile);
+// 🧩 Helper: auto-repair placeholder names
+function autoRepairTemplate(content) {
+  const correctTags = {
+    FULL_NAME: "fullName",
+    WITNESS_1_NAME: "witness1Name",
+    WITNESS_1_EMAIL: "witness1Email",
+    WITNESS_2_NAME: "witness2Name",
+    WITNESS_2_EMAIL: "witness2Email",
+    SIGNATURE_DATE: "signatureDate",
+  };
 
-async function runWatchdog(fileName) {
-  try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/watchdog-template`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName }),
-    });
-    const result = await response.json();
-    if (result?.ok && result.repairedTemplate) {
-      console.log("🛠 Watchdog repaired template:", result.repairedTemplate);
-      return path.join(process.cwd(), "temp", result.repairedTemplate);
+  let repairedContent = content;
+  const replacements = [];
+
+  for (const [wrongTag, rightTag] of Object.entries(correctTags)) {
+    const regex = new RegExp(`{{\\s*${wrongTag}\\s*}}`, "g");
+    if (regex.test(repairedContent)) {
+      repairedContent = repairedContent.replace(regex, `{{${rightTag}}}`);
+      replacements.push({ from: wrongTag, to: rightTag });
     }
-  } catch (err) {
-    console.warn("⚠️ Watchdog check skipped:", err.message);
   }
-  return path.join(process.cwd(), "templates", fileName);
+
+  return { repairedContent, replacements };
 }
 
+// 🛡️ Helper: Safe render (never crashes)
+function safeRender(doc, data) {
+  try {
+    doc.render(data);
+  } catch (error) {
+    if (error.name === "MultiError" && Array.isArray(error.properties?.errors)) {
+      const missing = error.properties.errors.map((e) => e.properties?.id || "unknown");
+      console.warn("⚠️ Missing variables detected:", missing);
+      // Fill missing keys with blanks and retry
+      missing.forEach((key) => (data[key] = data[key] || ""));
+      doc.render(data);
+      return { ok: true, missing };
+    } else {
+      throw error;
+    }
+  }
+  return { ok: true, missing: [] };
+}
+
+// ======= MAIN HANDLER =======
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, error: "Method Not Allowed" });
   }
 
   try {
-    const {
+    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body;
+    const data = {
       fullName,
       witness1Name,
       witness1Email,
       witness2Name,
       witness2Email,
-      FULL_NAME,
-      WITNESS_1_NAME,
-      WITNESS_1_EMAIL,
-      WITNESS_2_NAME,
-      WITNESS_2_EMAIL,
-    } = req.body;
-
-    // ✅ 1. Auto-run watchdog before rendering
-    const baseFile = "CommonCarryDeclaration.docx";
-    const templatePath = await runWatchdog(baseFile);
-
-    // ✅ 2. Auto-fill data with redundancy
-    const data = {
-      fullName: fullName || FULL_NAME || "[MISSING: fullName]",
-      witness1Name: witness1Name || WITNESS_1_NAME || "[MISSING: witness1Name]",
-      witness1Email: witness1Email || WITNESS_1_EMAIL || "[MISSING: witness1Email]",
-      witness2Name: witness2Name || WITNESS_2_NAME || "[MISSING: witness2Name]",
-      witness2Email: witness2Email || WITNESS_2_EMAIL || "[MISSING: witness2Email]",
       signatureDate: new Date().toLocaleDateString(),
     };
 
+    const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
     if (!fs.existsSync(templatePath)) {
-      return res.status(404).json({ ok: false, error: "Template not found after watchdog repair." });
+      return res.status(404).json({ ok: false, error: "Template not found" });
     }
 
-    // ✅ 3. Render template safely
-    const content = await readFile(templatePath, "binary");
-    const zip = new PizZip(content);
+    // ✅ Binary-safe read (no corruption)
+    const binaryContent = fs.readFileSync(templatePath, "binary");
+
+    // 🛠 Auto-repair placeholders
+    const { repairedContent, replacements } = autoRepairTemplate(binaryContent.toString());
+
+    // 🧩 Create zip safely
+    const zip = new PizZip(repairedContent, { base64: false });
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
 
-    let missingFields = [];
+    // ✅ Render without crashing
+    const renderResult = safeRender(doc, data);
 
+    // 🗂 Save rendered DOCX
+    const outputDir = path.join(process.cwd(), "temp");
+    const outputDocxPath = path.join(outputDir, "CommonCarryDeclaration_output.docx");
+    const outputPdfPath = path.join(outputDir, "CommonCarryDeclaration_output.pdf");
+
+    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
+
+    const buffer = doc.getZip().generate({ type: "nodebuffer" });
+    fs.writeFileSync(outputDocxPath, buffer);
+
+    // 🧾 Optional local PDF conversion (if LibreOffice is available)
     try {
-      doc.render(data);
-    } catch (error) {
-      console.warn("⚠️ Render issue:", error.message);
-      if (error.properties?.errors) {
-        missingFields = error.properties.errors.map(e => e.properties.explanation);
+      execSync(`libreoffice --headless --convert-to pdf "${outputDocxPath}" --outdir "${outputDir}"`);
+      if (fs.existsSync(outputPdfPath)) {
+        return res.status(200).json({
+          ok: true,
+          message: "✅ Local PDF generated successfully (self-healing mode).",
+          pdfPath: outputPdfPath,
+          replacements,
+          renderResult,
+        });
+      } else {
+        throw new Error("LibreOffice conversion failed.");
       }
+    } catch (pdfErr) {
+      console.warn("⚙️ Local PDF conversion failed:", pdfErr.message);
 
-      // Retry render with auto-filled placeholders
-      Object.keys(data).forEach(key => {
-        if (!data[key] || data[key].includes("[MISSING")) {
-          data[key] = `[AUTO-FIXED: ${key}]`;
-        }
+      return res.status(200).json({
+        ok: true,
+        message: "⚙️ Fallback to DOCX — PDF conversion unavailable.",
+        fallback: "docx",
+        replacements,
+        renderResult,
       });
-
-      try {
-        doc.render(data);
-      } catch (retryError) {
-        console.warn("⚠️ Retry render warning:", retryError.message);
-      }
     }
-
-    // ✅ 4. Generate output safely
-    const nodebuf = doc.getZip().generate({ type: "nodebuffer" });
-    const safeName = `CommonCarryDeclaration_${Date.now()}.docx`;
-    const outputPath = path.join(process.cwd(), "temp", safeName);
-    await writeFile(outputPath, nodebuf);
-
-    // ✅ 5. Return structured success
-    return res.status(200).json({
-      ok: true,
-      message: missingFields.length
-        ? "✅ DOCX generated (with minor auto-fixes)"
-        : "✅ DOCX generated successfully",
-      fileName: safeName,
-      missingFields,
-      fallback: "docx",
-    });
-  } catch (error) {
-    console.error("❌ Unhandled generator error:", error);
-    return res.status(200).json({
-      ok: true,
-      message: "⚠️ Fallback triggered — generation incomplete but system remained stable.",
-      error: error.message,
-      fallback: "none",
-    });
+  } catch (err) {
+    console.error("❌ Generator fatal error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 }
