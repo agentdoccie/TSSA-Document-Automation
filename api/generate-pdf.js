@@ -3,155 +3,167 @@ import fs from "fs";
 import path from "path";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
+import CloudConvert from "cloudconvert";
 import fetch from "node-fetch";
 import FormData from "form-data";
 
-// Safety: small helper
-const has = (v) => typeof v === "string" && v.trim().length > 0;
+const cloudConvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY);
+
+function safeName(s) {
+  return String(s || "document").replace(/[^a-z0-9._-]+/gi, "_").slice(0, 80);
+}
+
+// helpful logging for docxtemplater errors
+function explainDocxError(err) {
+  if (!err || !err.properties) return err?.message || String(err);
+  const lines = [];
+  if (err.properties.explanation) lines.push(err.properties.explanation);
+  if (Array.isArray(err.properties.errors)) {
+    err.properties.errors.forEach((e, i) => {
+      if (e.explanation) lines.push(`[${i}] ${e.explanation}`);
+      if (e.properties && e.properties.id) lines.push(`   id: ${e.properties.id}`);
+      if (e.properties && e.properties.expression) lines.push(`   expr: ${e.properties.expression}`);
+    });
+  }
+  return lines.join("\n") || err.message;
+}
+
+// tiny helper to render our HTML template with plain {{TAG}} replacements
+function renderHtmlTemplate(html, data) {
+  return html.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_, k) => {
+    const v = data[k];
+    return v == null ? "" : String(v);
+  });
+}
+
+// uploads a Buffer to CloudConvert import/upload task
+async function cloudconvertUploadFromBuffer(jobData, filename, buffer) {
+  const uploadTask = jobData.data.tasks.find(t => t.name === "import");
+  const form = new FormData();
+  const params = uploadTask.result.form.parameters || {};
+  Object.entries(params).forEach(([k, v]) => form.append(k, v));
+  form.append("file", buffer, { filename });
+  const r = await fetch(uploadTask.result.form.url, {
+    method: "POST",
+    body: form,
+  });
+  if (!r.ok) throw new Error(`CloudConvert upload failed (${r.status})`);
+}
+
+async function runCloudconvert(buffer, sourceExt, outNameBase) {
+  const jobCreate = await fetch("https://api.cloudconvert.com/v2/jobs", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.CLOUDCONVERT_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tasks: {
+        import: { operation: "import/upload" },
+        convert: { operation: "convert", input: "import", output_format: "pdf" },
+        export: { operation: "export/url", input: "convert" },
+      },
+    }),
+  });
+  const job = await jobCreate.json();
+  if (!jobCreate.ok) throw new Error(`CloudConvert job create failed (${jobCreate.status}) ${JSON.stringify(job)}`);
+
+  // Upload the source file (DOCX or HTML)
+  await cloudconvertUploadFromBuffer(job, `${outNameBase}.${sourceExt}`, buffer);
+
+  // wait for completion
+  const jobId = job.data.id;
+  let tries = 0;
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1500));
+    const st = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
+      headers: { Authorization: `Bearer ${process.env.CLOUDCONVERT_API_KEY}` }
+    });
+    const j = await st.json();
+    const s = j?.data?.status;
+    if (s === "finished") break;
+    if (s === "error") throw new Error(`CloudConvert error: ${JSON.stringify(j?.data)}`);
+    if (++tries > 30) throw new Error("CloudConvert timeout");
+  }
+
+  // grab the PDF URL and return the PDF buffer
+  const finalJob = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
+    headers: { Authorization: `Bearer ${process.env.CLOUDCONVERT_API_KEY}` }
+  });
+  const finalData = await finalJob.json();
+  const exportTask = finalData.data.tasks.find(t => t.name === "export");
+  const file = exportTask.result.files[0];
+  const pdfResp = await fetch(file.url);
+  const pdfBuffer = Buffer.from(await pdfResp.arrayBuffer());
+  return pdfBuffer;
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, error: "Method Not Allowed" });
   }
 
-  // 1) Gather input (trim to avoid whitespace mismatches)
+  // 1) Collect and sanitize input
   const fullName       = String(req.body.fullName || "").trim();
   const witness1Name   = String(req.body.witness1Name || "").trim();
   const witness1Email  = String(req.body.witness1Email || "").trim();
   const witness2Name   = String(req.body.witness2Name || "").trim();
   const witness2Email  = String(req.body.witness2Email || "").trim();
+  const data = {
+    FULL_NAME: fullName,
+    WITNESS_1_NAME: witness1Name,
+    WITNESS_1_EMAIL: witness1Email,
+    WITNESS_2_NAME: witness2Name,
+    WITNESS_2_EMAIL: witness2Email,
+    SIGNATURE_DATE: new Date().toLocaleDateString(),
+  };
+  const baseName = safeName(`${fullName || "CommonCarryDeclaration"}`);
 
-  // 2) Resolve template
+  // 2) Try DOCX → PDF first
   const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
-  if (!fs.existsSync(templatePath)) {
-    return res.status(500).json({
-      ok: false,
-      error: "Template not found on server",
-      hint: "/templates/CommonCarryDeclaration.docx",
-    });
-  }
-
-  let nodebuf;
   try {
+    if (!fs.existsSync(templatePath)) throw new Error("Template not found on server");
+
     const content = fs.readFileSync(templatePath, "binary");
     const zip = new PizZip(content);
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
 
-    // 3) Render placeholders — keys MUST match the template exactly
-    doc.render({
-      FULL_NAME:        fullName,
-      WITNESS_1_NAME:   witness1Name,
-      WITNESS_1_EMAIL:  witness1Email,
-      WITNESS_2_NAME:   witness2Name,
-      WITNESS_2_EMAIL:  witness2Email,
-      SIGNATURE_DATE:   new Date().toLocaleDateString(),
-    });
+    doc.render(data); // <-- If DOCX is unhealthy, error will be thrown here
 
-    nodebuf = doc.getZip().generate({ type: "nodebuffer" });
-  } catch (e) {
-    // Docxtemplater gives precise errors when a tag is missing/invalid
-    console.error("DOCX render failed:", e);
-    return res.status(500).json({
-      ok: false,
-      error: "DOCX render failed",
-      detail: sanitizeDocxError(e),
-      hint: "Ensure your .docx placeholders exactly match: FULL_NAME, WITNESS_1_NAME, WITNESS_1_EMAIL, WITNESS_2_NAME, WITNESS_2_EMAIL, SIGNATURE_DATE.",
-    });
-  }
+    // render DOCX to buffer (we still let CloudConvert make the final PDF)
+    const docxBuffer = doc.getZip().generate({ type: "nodebuffer" });
 
-  // 4) Try CloudConvert to get a PDF; if anything goes wrong, fall back to DOCX
-  const ccKey = process.env.CLOUDCONVERT_API_KEY || "";
-  const safeName = `CommonCarryDeclaration`;
+    const pdf = await runCloudconvert(docxBuffer, "docx", baseName);
 
-  if (has(ccKey)) {
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${baseName}.pdf"`);
+    return res.send(pdf);
+  } catch (err) {
+    // 3) Log real cause and FALL BACK to HTML → PDF
+    console.error("DOCX render failed:", explainDocxError(err));
+
     try {
-      // Create job: import/upload → convert(pdf) → export/url
-      const createR = await fetch("https://api.cloudconvert.com/v2/jobs", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${ccKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          tasks: {
-            import:  { operation: "import/upload" },
-            convert: { operation: "convert", input: "import", output_format: "pdf" },
-            export:  { operation: "export/url", input: "convert" },
-          },
-        }),
-      });
-      const job = await createR.json();
-      if (!createR.ok) throw new Error(`job create ${createR.status} ${JSON.stringify(job)}`);
+      const htmlPath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.html");
+      if (!fs.existsSync(htmlPath)) throw new Error("HTML fallback template not found");
+      const rawHtml = fs.readFileSync(htmlPath, "utf8");
+      const filledHtml = renderHtmlTemplate(rawHtml, data);
+      const htmlBuffer = Buffer.from(filledHtml, "utf8");
 
-      const uploadTask = job?.data?.tasks?.find(t => t.name === "import");
-      if (!uploadTask?.result?.form?.url) throw new Error("no upload form");
-
-      // Build multipart with returned fields
-      const form = new FormData();
-      Object.entries(uploadTask.result.form.parameters || {}).forEach(([k, v]) => form.append(k, v));
-      form.append("file", nodebuf, { filename: "doc.docx", contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
-
-      const up = await fetch(uploadTask.result.form.url, { method: "POST", body: form });
-      if (!up.ok) throw new Error(`upload ${up.status}`);
-
-      // Poll until finished
-      const jobId = job.data.id;
-      let done = false, tries = 0;
-      while (!done && tries < 40) {
-        await sleep(1500);
-        const jr = await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
-          headers: { Authorization: `Bearer ${ccKey}` },
-        });
-        const jj = await jr.json();
-        const st = jj?.data?.status;
-        if (st === "finished") { done = true; break; }
-        if (st === "error") throw new Error(`cloudconvert error: ${JSON.stringify(jj?.data)}`);
-        tries++;
-      }
-      if (!done) throw new Error("cloudconvert timeout");
-
-      // Grab exported file
-      const exportTask = (await fetch(`https://api.cloudconvert.com/v2/jobs/${jobId}`, {
-        headers: { Authorization: `Bearer ${ccKey}` },
-      }).then(r => r.json()))?.data?.tasks?.find(t => t.operation === "export/url");
-
-      const fileUrl = exportTask?.result?.files?.[0]?.url;
-      if (!fileUrl) throw new Error("no export url");
-
-      const pdfResp = await fetch(fileUrl);
-      const pdfBuffer = Buffer.from(await pdfResp.arrayBuffer());
+      const pdf = await runCloudconvert(htmlBuffer, "html", baseName);
 
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="${safeName}.pdf"`);
-      return res.send(pdfBuffer);
-    } catch (err) {
-      console.error("CloudConvert failed — falling back to DOCX:", err.message);
-      // continue to DOCX fallback
+      res.setHeader("Content-Disposition", `attachment; filename="${baseName}.pdf"`);
+      return res.send(pdf);
+    } catch (fallbackErr) {
+      console.error("HTML fallback failed:", fallbackErr?.message || fallbackErr);
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to generate document",
+        details: {
+          docx: explainDocxError(err),
+          html: String(fallbackErr?.message || fallbackErr),
+        },
+      });
     }
   }
-
-  // 5) Fallback: return the rendered DOCX so the user still gets a document
-  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-  res.setHeader("Content-Disposition", `attachment; filename="${safeName}.docx"`);
-  return res.send(nodebuf);
-}
-
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-// Docxtemplater error payloads are objects; strip huge buffers
-function sanitizeDocxError(e) {
-  const out = { message: e?.message || String(e) };
-  if (e?.properties?.errors) {
-    out.properties = {
-      errors: e.properties.errors.map((er) => ({
-        id: er.id, // e.g. "rawTag" / "nonclosingtag" / "scopeparser"
-        explanation: er.explanation,
-        tag: er.properties?.tag,
-        file: er.properties?.file,
-      })),
-    };
-  }
-  return out;
 }
