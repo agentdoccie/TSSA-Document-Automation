@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
-  "scripts": { "start": "node index.js" },
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "docxtemplater": "3.36.0",
     "pizzip": "3.1.4",
