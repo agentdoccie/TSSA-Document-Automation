@@ -1,4 +1,6 @@
-// ======= /api/generate-document.js =======
+// ======= Unified Document Generator =======
+// Intelligent DOCX → PDF generator with CloudConvert + Local + DOCX fallback
+// Fault-tolerant, binary-safe, tag-healing, and crash-proof
 
 import fs from "fs";
 import path from "path";
@@ -7,9 +9,13 @@ import Docxtemplater from "docxtemplater";
 import { execSync } from "child_process";
 import CloudConvert from "cloudconvert";
 
-const cloudConvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY);
+// Initialize CloudConvert client (safe to keep even if API key missing)
+const cloudConvert = process.env.CLOUDCONVERT_API_KEY
+  ? new CloudConvert(process.env.CLOUDCONVERT_API_KEY)
+  : null;
 
-// 🔍 Scan {{tags}} from template
+// -------------------------------------------------------------
+// 🔍 Extract {{tags}} dynamically from DOCX content
 function extractTags(content) {
   const regex = /{{\s*([^}\s]+)\s*}}/g;
   const found = new Set();
@@ -18,7 +24,8 @@ function extractTags(content) {
   return Array.from(found);
 }
 
-// 🧩 Fix legacy tags (uppercase → lowercase)
+// -------------------------------------------------------------
+// 🧩 Normalize legacy uppercase placeholders → lowercase JSON keys
 function normalizeTags(content) {
   const map = {
     FULL_NAME: "fullName",
@@ -35,7 +42,8 @@ function normalizeTags(content) {
   return content;
 }
 
-// 🛡 Safe rendering — fill missing tags automatically
+// -------------------------------------------------------------
+// 🛡 Safe rendering — auto-fill missing fields with empty values
 function safeRender(doc, data, tags) {
   const copy = { ...data };
   tags.forEach((t) => {
@@ -48,19 +56,26 @@ function safeRender(doc, data, tags) {
   } catch (err) {
     const missing = (err.properties?.errors || []).map((e) => e.properties?.id);
     missing.forEach((t) => (copy[t] = ""));
-    doc.render(copy);
-    return { ok: true, missing };
+    try {
+      doc.render(copy);
+      return { ok: true, missing };
+    } catch (err2) {
+      console.error("⚠️ Docxtemplater render failed twice:", err2);
+      return { ok: false, error: err2.message };
+    }
   }
 }
 
-// ======= MAIN HANDLER =======
+// -------------------------------------------------------------
+// ⚙️ MAIN HANDLER
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, error: "Method Not Allowed" });
   }
 
   try {
-    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body;
+    // Extract and sanitize incoming data
+    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body || {};
 
     const data = {
       fullName,
@@ -71,31 +86,35 @@ export default async function handler(req, res) {
       signatureDate: new Date().toLocaleDateString(),
     };
 
+    // Locate template file
     const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
     if (!fs.existsSync(templatePath)) {
       return res.status(404).json({ ok: false, error: "Template not found" });
     }
 
-    // ✅ Binary-safe read
+    // Binary-safe read and normalization
     const binaryContent = fs.readFileSync(templatePath, "binary");
     const normalized = normalizeTags(binaryContent.toString());
     const tags = extractTags(normalized);
+
     const zip = new PizZip(normalized, { base64: false });
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
 
-    // 🧠 Render safely
+    // Render safely (never crashes)
     const renderResult = safeRender(doc, data, tags);
 
-    // 🗂 Save .docx
+    // Save generated DOCX
     const outputDir = path.join(process.cwd(), "temp");
     if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
 
     const outputDocxPath = path.join(outputDir, "CommonCarryDeclaration_output.docx");
     const outputPdfPath = path.join(outputDir, "CommonCarryDeclaration_output.pdf");
+
     fs.writeFileSync(outputDocxPath, doc.getZip().generate({ type: "nodebuffer" }));
 
-    // ======= STEP 1: Try CloudConvert PDF =======
-    if (process.env.CLOUDCONVERT_API_KEY) {
+    // =========================================================
+    // 🧠 STEP 1: Try CloudConvert PDF generation
+    if (cloudConvert) {
       try {
         const job = await cloudConvert.jobs.create({
           tasks: {
@@ -132,11 +151,12 @@ export default async function handler(req, res) {
           renderResult,
         });
       } catch (err) {
-        console.warn("⚠️ CloudConvert failed:", err.message);
+        console.warn("⚠️ CloudConvert PDF generation failed:", err.message);
       }
     }
 
-    // ======= STEP 2: Fallback — Local PDF (LibreOffice) =======
+    // =========================================================
+    // ⚙️ STEP 2: Try Local LibreOffice PDF conversion
     try {
       execSync(`libreoffice --headless --convert-to pdf "${outputDocxPath}" --outdir "${outputDir}"`);
       if (fs.existsSync(outputPdfPath)) {
@@ -148,24 +168,23 @@ export default async function handler(req, res) {
           tagsFound: tags,
           renderResult,
         });
-      } else {
-        throw new Error("LibreOffice conversion failed.");
       }
     } catch (pdfErr) {
       console.warn("⚙️ Local PDF conversion failed:", pdfErr.message);
-
-      // ======= STEP 3: Last Resort — DOCX only =======
-      return res.status(200).json({
-        ok: true,
-        mode: "fallback",
-        message: "⚙️ Fallback to DOCX — PDF unavailable, DOCX returned instead.",
-        docxPath: outputDocxPath,
-        tagsFound: tags,
-        renderResult,
-      });
     }
+
+    // =========================================================
+    // 📄 STEP 3: Fallback — Return DOCX version only
+    return res.status(200).json({
+      ok: true,
+      mode: "fallback",
+      message: "⚙️ Fallback to DOCX — PDF unavailable, DOCX returned instead.",
+      docxPath: outputDocxPath,
+      tagsFound: tags,
+      renderResult,
+    });
   } catch (err) {
-    console.error("❌ Fatal:", err);
+    console.error("❌ Fatal error:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 }
