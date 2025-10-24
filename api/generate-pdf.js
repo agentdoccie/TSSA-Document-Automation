@@ -1,58 +1,29 @@
-// api/generate-pdf.js
 import fs from "fs";
 import path from "path";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import CloudConvert from "cloudconvert";
 
-const TEMPLATE_FILE = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
-
-function safe(t) {
-  return typeof t === "string" ? t.trim() : "";
-}
-
-// helper to log and respond safely
-function fail(res, status, code, detail) {
-  console.error(`[generate-pdf][${code}]`, detail);
-  return res.status(status).json({ ok: false, code, error: String(detail || "Unknown error") });
-}
+const cloudConvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY);
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return fail(res, 405, "METHOD_NOT_ALLOWED", "Use POST");
+    return res.status(405).json({ error: "Method Not Allowed" });
   }
 
-  // 1️⃣ Validate input
-  let fullName, witness1Name, witness1Email, witness2Name, witness2Email;
   try {
-    ({ fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body || {});
-    fullName = safe(fullName);
-    witness1Name = safe(witness1Name);
-    witness1Email = safe(witness1Email);
-    witness2Name = safe(witness2Name);
-    witness2Email = safe(witness2Email);
+    // Extract data from the form submission
+    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body;
 
-    if (!fullName || !witness1Name || !witness2Name) {
-      return fail(res, 400, "VALIDATION", "Full name and both witness names are required.");
-    }
-  } catch (e) {
-    return fail(res, 400, "BAD_JSON", e);
-  }
+    // Load the Common Carry Declaration template
+    const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
+    const content = fs.readFileSync(templatePath, "binary");
 
-  // 2️⃣ Ensure template is readable
-  let templateBuffer;
-  try {
-    templateBuffer = fs.readFileSync(TEMPLATE_FILE);
-  } catch (e) {
-    return fail(res, 500, "TEMPLATE_READ", `Template not found or unreadable at ${TEMPLATE_FILE}`);
-  }
-
-  // 3️⃣ Render DOCX
-  let docxBuffer;
-  try {
-    const zip = new PizZip(templateBuffer);
+    // Initialize docx templating engine
+    const zip = new PizZip(content);
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
 
+    // Render variables into the document
     doc.render({
       FULL_NAME: fullName,
       WITNESS_1_NAME: witness1Name,
@@ -61,72 +32,58 @@ export default async function handler(req, res) {
       WITNESS_2_EMAIL: witness2Email,
     });
 
-    docxBuffer = doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" });
-  } catch (e) {
-    return fail(res, 500, "DOCX_RENDER", e.message || e);
-  }
+    // Create output directory if it doesn’t exist
+    const tempDir = path.join(process.cwd(), "output");
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
 
-  // 4️⃣ CloudConvert → try PDF, fallback to DOCX
-  const apiKey = process.env.CLOUDCONVERT_API_KEY;
-  if (!apiKey) {
-    console.warn("[generate-pdf] No CLOUDCONVERT_API_KEY found. Returning DOCX fallback.");
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    );
-    res.setHeader("Content-Disposition", `attachment; filename="${fullName || "Declaration"}.docx"`);
-    return res.status(200).send(docxBuffer);
-  }
+    // Generate safe file name
+    const safeName = (fullName || "Declaration").replace(/[^\w\s-]/g, "_");
 
-  try {
-    const cloudConvert = new CloudConvert(apiKey);
+    // Save rendered DOCX file
+    const inputFilePath = path.join(tempDir, `${safeName}.docx`);
+    fs.writeFileSync(inputFilePath, doc.getZip().generate({ type: "nodebuffer" }));
 
-    const job = await cloudConvert.jobs.create({
-      tasks: {
-        "import-my-file": {
-          operation: "import/base64",
-          file: docxBuffer.toString("base64"),
-          filename: `${fullName || "Declaration"}.docx`,
+    // -------------------------------------------------------------
+    // 🧩 Attempt PDF conversion via CloudConvert
+    // -------------------------------------------------------------
+    try {
+      const job = await cloudConvert.jobs.create({
+        tasks: {
+          import: { operation: "import/upload" },
+          convert: { operation: "convert", input: "import", output_format: "pdf" },
+          export: { operation: "export/url", input: "convert" },
         },
-        "convert-my-file": {
-          operation: "convert",
-          input: "import-my-file",
-          input_format: "docx",
-          output_format: "pdf",
-          engine: "office",
-        },
-        "export-my-file": {
-          operation: "export/url",
-          input: "convert-my-file",
-          inline: false,
-          archive_multiple_files: false,
-        },
-      },
-      tag: "tssa-generate-pdf",
-    });
+      });
 
-    const completed = await cloudConvert.jobs.wait(job.id, { poll_interval: 1000 });
-    const exportTask = completed.tasks.find(t => t.name === "export-my-file" && t.status === "finished");
+      // Upload DOCX to CloudConvert
+      const uploadTask = job.tasks.find(t => t.name === "import");
+      await cloudConvert.tasks.upload(uploadTask, fs.createReadStream(inputFilePath));
 
-    if (!exportTask || !exportTask.result?.files?.[0]) {
-      throw new Error("PDF export missing in CloudConvert result.");
+      // Wait for job to finish
+      const updatedJob = await cloudConvert.jobs.wait(job.id);
+      const exportTask = updatedJob.tasks.find(t => t.name === "export");
+      const file = exportTask.result.files[0];
+
+      // Fetch the converted PDF
+      const response = await fetch(file.url);
+      const pdfBuffer = Buffer.from(await response.arrayBuffer());
+
+      // Send the PDF to the user
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}.pdf"`);
+      return res.send(pdfBuffer);
+
+    } catch (err) {
+      // Fallback to DOCX if CloudConvert fails
+      console.error("❌ CloudConvert failed — sending DOCX fallback:", err.message);
+      const buffer = doc.getZip().generate({ type: "nodebuffer" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}.docx"`);
+      return res.send(buffer);
     }
 
-    const pdfUrl = exportTask.result.files[0].url;
-    const r = await fetch(pdfUrl);
-    if (!r.ok) throw new Error(`Failed to fetch PDF (${r.status})`);
-    const pdfArrayBuffer = await r.arrayBuffer();
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${fullName || "Declaration"}.pdf"`);
-    return res.status(200).send(Buffer.from(pdfArrayBuffer));
-  } catch (e) {
-    console.error("[generate-pdf][CLOUDCONVERT_FAIL]", e?.response?.data || e?.message || e);
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    );
-    res.setHeader("Content-Disposition", `attachment; filename="${fullName || "Declaration"}.docx"`);
-    return res.status(200).send(docxBuffer);
+  } catch (err) {
+    console.error("❌ Fatal error in generate-pdf.js:", err);
+    return res.status(500).json({ error: err.message || "Unexpected server error" });
   }
 }
