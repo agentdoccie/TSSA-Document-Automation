@@ -1,13 +1,26 @@
-// ========================================
+// ============================================================
 // /api/debug-template.js
 // Auto-detects and repairs DOCX placeholder tags
-// ========================================
+// Includes built-in version tracking and cache-busting
+// ============================================================
 
 import fs from "fs";
 import path from "path";
 import PizZip from "pizzip";
 
+// 🧩 Force-build version (update or auto-inject via script)
+const BUILD_VERSION = "2025-10-24-23:15";
+
 export default async function handler(req, res) {
+  console.log("🚀 DEBUG-TEMPLATE FUNCTION STARTED");
+  console.log("🔖 Active build version:", BUILD_VERSION);
+  console.log("🕒 Current server time:", new Date().toISOString());
+
+  // ————— Security failsafe —————
+  if (process.env.FORCE_REBUILD_VERSION && process.env.FORCE_REBUILD_VERSION !== BUILD_VERSION) {
+    console.warn("⚠️ WARNING: Cached or stale build detected!");
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, error: "Method not allowed" });
   }
@@ -53,15 +66,16 @@ export default async function handler(req, res) {
       fixedXml = fixedXml.replace(regexOld, `{{${newTag}}}`);
     });
 
-    // --- Write a corrected version safely for Vercel (read-only /var/task)
-    const fixedFileName = template.replace(".docx", "_fixed.docx");
-    const outputPath = path.join("/tmp", fixedFileName); // ✅ use tmp instead of project folder
+    // ========================================================
+    // ✅ Write a corrected version safely to Vercel’s /tmp directory
+    // ========================================================
+    const fixedFileName = template.replace(".docx", `_fixed_${BUILD_VERSION}.docx`);
+    const outputPath = path.join("/tmp", fixedFileName);
 
     try {
       zip.file("word/document.xml", fixedXml);
       const outputBuffer = zip.generate({ type: "nodebuffer" });
 
-      // Write to temp directory
       fs.writeFileSync(outputPath, outputBuffer);
       console.log(`✅ Fixed DOCX saved temporarily at: ${outputPath}`);
 
@@ -72,6 +86,7 @@ export default async function handler(req, res) {
         tagsFound: Array.from(found),
         repairedFile: fixedFileName,
         tempPath: outputPath,
+        version: BUILD_VERSION,
       });
     } catch (writeErr) {
       console.error("❌ Failed to write repaired DOCX:", writeErr);
@@ -79,11 +94,15 @@ export default async function handler(req, res) {
         ok: false,
         error: "Failed to save repaired DOCX file",
         details: writeErr.message,
+        version: BUILD_VERSION,
       });
     }
-
   } catch (err) {
     console.error("❌ Debug-template error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({
+      ok: false,
+      error: err.message,
+      version: BUILD_VERSION,
+    });
   }
 }
