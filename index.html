@@ -10,28 +10,27 @@
     <h1>TSSA Document Automation Portal</h1>
     <p>Fill out the form below to generate your Common Carry Declaration.</p>
 
-    <form id="declarationForm">
+    <form id="docForm" onsubmit="return false;">
       <label for="fullName">Full Name:</label><br />
-      <input type="text" id="fullName" name="fullName" required /><br /><br />
+      <input type="text" id="fullName" required /><br /><br />
 
       <label for="witness1Name">Witness 1 (Name):</label><br />
-      <input type="text" id="witness1Name" name="witness1Name" required /><br /><br />
+      <input type="text" id="witness1Name" required /><br /><br />
 
       <label for="witness1Email">Witness 1 (Email):</label><br />
-      <input type="email" id="witness1Email" name="witness1Email" /><br /><br />
+      <input type="email" id="witness1Email" /><br /><br />
 
       <label for="witness2Name">Witness 2 (Name):</label><br />
-      <input type="text" id="witness2Name" name="witness2Name" required /><br /><br />
+      <input type="text" id="witness2Name" required /><br /><br />
 
       <label for="witness2Email">Witness 2 (Email):</label><br />
-      <input type="email" id="witness2Email" name="witness2Email" /><br /><br />
+      <input type="email" id="witness2Email" /><br /><br />
 
-      <button type="submit">Generate Document</button>
+      <button id="generateBtn" type="button">Generate Document</button>
     </form>
 
-    <p id="error" style="color: red; margin-top: 20px;"></p>
+    <p id="message" style="color:black;min-height:1.5em;margin-top:10px;"></p>
 
-    <!-- ✅ Make sure this script tag is LAST so the form exists before JS runs -->
     <script src="form.js"></script>
   </body>
 </html>
