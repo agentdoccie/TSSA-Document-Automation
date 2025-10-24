@@ -1,84 +1,77 @@
-// ✅ TSSA — Generate PDF from DOCX with detailed CloudConvert logging
-import fs from "fs/promises";
+import fs from "fs";
 import path from "path";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import CloudConvert from "cloudconvert";
 
-export const config = { runtime: "nodejs" };
-
-const cloudconvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY);
-
-async function readJsonBody(req) {
-  const chunks = [];
-  for await (const c of req) chunks.push(c);
-  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-}
+const cloudConvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY);
 
 export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method Not Allowed" });
+  }
+
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
-    }
+    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body;
 
-    const body = await readJsonBody(req);
-    const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = body;
-
-    // Load the template
+    // Load DOCX template (placed in /templates/CommonCarryDeclaration.docx)
     const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
-    const content = await fs.readFile(templatePath, "binary");
+    const content = fs.readFileSync(templatePath, "binary");
+
     const zip = new PizZip(content);
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
 
+    // Replace placeholders with submitted values
     doc.render({
       FULL_NAME: fullName,
       WITNESS_1_NAME: witness1Name,
       WITNESS_1_EMAIL: witness1Email,
       WITNESS_2_NAME: witness2Name,
       WITNESS_2_EMAIL: witness2Email,
-      SIGNATURE_DATE: new Date().toLocaleDateString("en-US")
+      SIGNATURE_DATE: new Date().toLocaleDateString(),
     });
 
-    const filled = doc.getZip().generate({ type: "nodebuffer" });
-    const fileBase64 = filled.toString("base64");
+    // Generate DOCX buffer
+    const buffer = doc.getZip().generate({ type: "nodebuffer" });
 
-    // ✅ CloudConvert job
-    const job = await cloudconvert.jobs.create({
+    // Save DOCX temporarily for conversion
+    const tempDocx = "/tmp/CommonCarryDeclaration.docx";
+    fs.writeFileSync(tempDocx, buffer);
+
+    // 🔹 Upload to CloudConvert for DOCX → PDF
+    const job = await cloudConvert.jobs.create({
       tasks: {
-        importBase: {
-          operation: "import/base64",
-          file: fileBase64,
-          filename: "CommonCarryDeclaration.docx"
+        import_file: {
+          operation: "import/upload",
         },
         convert: {
           operation: "convert",
-          input: ["importBase"],
+          input: "import_file",
           input_format: "docx",
-          output_format: "pdf"
+          output_format: "pdf",
         },
-        exportResult: {
+        export_file: {
           operation: "export/url",
-          input: ["convert"]
-        }
-      }
+          input: "convert",
+        },
+      },
     });
 
-    const result = await cloudconvert.jobs.wait(job.id);
-    const exportTask = result.tasks.find(t => t.name === "exportResult");
+    const uploadTask = job.tasks.find(task => task.name === "import_file");
+    const uploadUrl = uploadTask.result.form.url;
 
-    if (!exportTask || !exportTask.result?.files?.[0]) {
-      console.error("CloudConvert error details:", result);
-      throw new Error("Conversion failed — check API key or task structure");
-    }
+    // Upload file to CloudConvert
+    await cloudConvert.tasks.upload(uploadUrl, fs.createReadStream(tempDocx));
 
+    // Wait for job to finish
+    const finishedJob = await cloudConvert.jobs.wait(job.id);
+    const exportTask = finishedJob.tasks.find(task => task.operation === "export/url");
     const pdfUrl = exportTask.result.files[0].url;
-    res.status(200).json({ success: true, pdfUrl });
 
-  } catch (err) {
-    console.error("💥 generate-pdf error:", err);
-    res.status(500).json({
-      message: err.message,
-      stack: err.stack,
-    });
+    // ✅ Return PDF URL
+    res.status(200).json({ pdfUrl });
+  } catch (error) {
+    console.error("❌ PDF generation error:", error);
+    res.status(500).json({ error: "Failed to generate PDF" });
   }
 }
