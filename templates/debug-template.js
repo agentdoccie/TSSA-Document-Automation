@@ -15,16 +15,12 @@ export default async function handler(req, res) {
   try {
     const { template } = req.body;
     if (!template) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Missing 'template' field" });
+      return res.status(400).json({ ok: false, error: "Missing 'template' field" });
     }
 
     const templatePath = path.join(process.cwd(), "templates", template);
     if (!fs.existsSync(templatePath)) {
-      return res
-        .status(404)
-        .json({ ok: false, error: `Template not found: ${template}` });
+      return res.status(404).json({ ok: false, error: "Template not found" });
     }
 
     // --- Binary-safe read
@@ -57,17 +53,17 @@ export default async function handler(req, res) {
       fixedXml = fixedXml.replace(regexOld, `{{${newTag}}}`);
     });
 
-    // --- Write a corrected version
+    // --- Write a corrected version safely for Vercel (read-only /var/task)
     const fixedFileName = template.replace(".docx", "_fixed.docx");
-    const outputPath = path.join(process.cwd(), "templates", fixedFileName);
+    const outputPath = path.join("/tmp", fixedFileName); // ✅ use tmp instead of project folder
 
     try {
       zip.file("word/document.xml", fixedXml);
       const outputBuffer = zip.generate({ type: "nodebuffer" });
 
-      // Explicitly log and confirm file creation
+      // Write to temp directory
       fs.writeFileSync(outputPath, outputBuffer);
-      console.log(`✅ Fixed DOCX saved at: ${outputPath}`);
+      console.log(`✅ Fixed DOCX saved temporarily at: ${outputPath}`);
 
       return res.status(200).json({
         ok: true,
@@ -75,6 +71,7 @@ export default async function handler(req, res) {
         totalTags: found.size,
         tagsFound: Array.from(found),
         repairedFile: fixedFileName,
+        tempPath: outputPath,
       });
     } catch (writeErr) {
       console.error("❌ Failed to write repaired DOCX:", writeErr);
@@ -84,6 +81,7 @@ export default async function handler(req, res) {
         details: writeErr.message,
       });
     }
+
   } catch (err) {
     console.error("❌ Debug-template error:", err);
     return res.status(500).json({ ok: false, error: err.message });
