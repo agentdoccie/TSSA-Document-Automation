@@ -53,6 +53,7 @@ export default async function handler(req, res) {
       WITNESS_1_EMAIL: witness1Email,
       WITNESS_2_NAME: witness2Name,
       WITNESS_2_EMAIL: witness2Email,
+      SIGNATURE_DATE: new Date().toLocaleDateString()
     });
 
     nodebuf = doc.getZip().generate({ type: "nodebuffer" });
