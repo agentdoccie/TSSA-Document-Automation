@@ -1,16 +1,13 @@
 {
   "name": "tssa-document-automation",
   "version": "1.0.0",
-  "description": "TSSA Document Automation Portal",
-  "main": "index.js",
   "type": "module",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
   "dependencies": {
-    "docx": "^8.5.0",
-    "docxtemplater": "^3.36.0",
-    "pizzip": "^3.1.4",
-    "cloudconvert": "^2.3.0"
+    "docxtemplater": "3.36.0",
+    "pizzip": "3.1.4",
+    "docx": "8.5.0",
+    "cloudconvert": "2.3.0"
   }
 }
