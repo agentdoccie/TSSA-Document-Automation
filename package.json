@@ -8,6 +8,7 @@
     "docxtemplater": "3.36.0",
     "pizzip": "3.1.4",
     "docx": "8.5.0",
-    "cloudconvert": "2.3.0"
+    "cloudconvert": "2.3.0",
+    "pdf-lib": "1.17.1"
   }
 }
