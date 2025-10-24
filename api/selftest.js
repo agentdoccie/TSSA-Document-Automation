@@ -13,35 +13,28 @@ export default async function handler(req, res) {
   };
 
   try {
-    // --- 1️⃣ Check template file ---
+    // 1️⃣ Template check
     const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
-    if (fs.existsSync(templatePath)) {
-      report.template = "✅ Template file found";
-    } else {
+    if (!fs.existsSync(templatePath)) {
       report.template = "❌ Template missing";
       return res.status(500).json(report);
     }
+    report.template = "✅ Template file found";
 
-    // --- 2️⃣ Check DOCX rendering ---
+    // 2️⃣ DOCX rendering check
     const content = fs.readFileSync(templatePath, "binary");
     const zip = new PizZip(content);
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+    doc.render({
+      FULL_NAME: "Test User",
+      WITNESS_1_NAME: "Witness One",
+      WITNESS_1_EMAIL: "one@example.com",
+      WITNESS_2_NAME: "Witness Two",
+      WITNESS_2_EMAIL: "two@example.com",
+    });
+    report.docRender = "✅ DOCX template rendering successful";
 
-    try {
-      doc.render({
-        FULL_NAME: "Test User",
-        WITNESS_1_NAME: "Witness One",
-        WITNESS_1_EMAIL: "one@example.com",
-        WITNESS_2_NAME: "Witness Two",
-        WITNESS_2_EMAIL: "two@example.com",
-      });
-      report.docRender = "✅ DOCX template rendering successful";
-    } catch (err) {
-      report.docRender = `❌ DOCX render failed: ${err.message}`;
-      return res.status(500).json(report);
-    }
-
-    // --- 3️⃣ Check CloudConvert API Key ---
+    // 3️⃣ CloudConvert key check
     const apiKey = process.env.CLOUDCONVERT_API_KEY;
     if (!apiKey) {
       report.cloudConvertKey = "❌ No CloudConvert API key detected";
@@ -50,33 +43,32 @@ export default async function handler(req, res) {
     const cloudConvert = new CloudConvert(apiKey);
     report.cloudConvertKey = "✅ CloudConvert API key detected";
 
-    // --- 4️⃣ Attempt a test conversion ---
+    // 4️⃣ Attempt CloudConvert job (using buffer instead of file)
     try {
-      const tempDir = path.join(process.cwd(), "output");
-      if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
-      const testPath = path.join(tempDir, "test.docx");
-      fs.writeFileSync(testPath, doc.getZip().generate({ type: "nodebuffer" }));
+      const buffer = doc.getZip().generate({ type: "nodebuffer" });
 
       const job = await cloudConvert.jobs.create({
         tasks: {
-          import: { operation: "import/upload" },
-          convert: { operation: "convert", input: "import", output_format: "pdf" },
+          importBuffer: { operation: "import/base64", file: buffer.toString("base64") },
+          convert: { operation: "convert", input: "importBuffer", output_format: "pdf" },
           export: { operation: "export/url", input: "convert" },
         },
       });
 
-      const uploadTask = job.tasks.find(t => t.name === "import");
-      await cloudConvert.tasks.upload(uploadTask, fs.createReadStream(testPath));
       await cloudConvert.jobs.wait(job.id);
+      const exportTask = job.tasks.find(t => t.operation === "export/url");
+      const fileUrl = exportTask.result?.files?.[0]?.url;
 
-      report.pdfConversion = "✅ CloudConvert PDF conversion successful";
+      report.pdfConversion = fileUrl
+        ? "✅ CloudConvert PDF conversion successful"
+        : "⚠️ Conversion job ran but file URL missing";
     } catch (err) {
       report.pdfConversion = `❌ CloudConvert conversion failed: ${err.message}`;
     }
 
     return res.status(200).json(report);
   } catch (err) {
-    report.final = `❌ Unhandled fatal error: ${err.message}`;
+    report.final = `❌ Fatal: ${err.message}`;
     return res.status(500).json(report);
   }
 }
