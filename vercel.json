@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "functions": {
+    "api/*.js": {
+      "runtime": "nodejs20.x"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/selftest",
+      "schedule": "0 3 * * *"
+    }
+  ],
+  "env": {
+    "ALERT_EMAIL": "nick@payitforward.africa",
+    "ALERT_FROM": "TSSA Monitor <no-reply@yourdomain.tld>"
+  }
+}
