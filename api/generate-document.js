@@ -1,24 +1,31 @@
-// =======================================================
+// ================================================
 // /api/generate-document.js
-// =======================================================
+// ================================================
 // Purpose: Securely generate DOCX (and optional PDF later)
 // Features:
 // ✅ Uses safeRenderDocx() to avoid EROFS and render errors
 // ✅ Always returns structured JSON response
 // ✅ Detects missing template or bad input gracefully
 // ✅ Works on Vercel with /tmp safe writes and Node runtime
-// =======================================================
+// ================================================
 
 export const config = {
-  runtime: "nodejs18.x", // ⬅️ Ensures full Node features for fs/path
+  runtime: "nodejs18.x", // 🟦 Ensures full Node features for fs/path
 };
 
 import path from "path";
+import fs from "fs";
 import { safeRenderDocx } from "../../lib/safeRenderDocx.js";
 
-export default async function handler(req, res) {
-  console.log("⚙️ /api/generate-document invoked at:", new Date().toISOString());
+// --- Self-healing runtime safeguard ---
+process.on("uncaughtException", err => {
+  console.error("💥 Uncaught Exception:", err);
+});
+process.on("unhandledRejection", reason => {
+  console.error("💥 Unhandled Rejection:", reason);
+});
 
+export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({
       ok: false,
@@ -29,54 +36,48 @@ export default async function handler(req, res) {
   try {
     // 1️⃣ Parse JSON body
     const { template, data } = req.body || {};
-
-    // 2️⃣ Validate required input
-    if (!template) {
-      console.error("❌ Missing 'template' in request.");
+    if (!template || typeof data !== "object") {
       return res.status(400).json({
         ok: false,
-        error: "Missing 'template' field.",
+        error: "Missing or invalid request body. Expected { template, data }.",
       });
     }
 
-    // 3️⃣ Construct safe template file path
-    const templateFile = path.basename(template);
-    const renderData = data || {};
+    // 2️⃣ Validate template existence
+    const templatePath = path.join(process.cwd(), "templates", template);
+    if (!fs.existsSync(templatePath)) {
+      return res.status(404).json({
+        ok: false,
+        error: `Template '${template}' not found in /templates`,
+      });
+    }
 
-    // 4️⃣ Log before render
-    console.log("🧩 Starting safeRenderDocx:", { templateFile });
+    console.log(`🧩 Starting render for template: ${template}`);
 
-    // 5️⃣ Safely render document using isolated library
-    const result = await safeRenderDocx({ templateFile, renderData });
+    // 3️⃣ Render securely (safeRenderDocx handles /tmp)
+    const renderResult = await safeRenderDocx(templatePath, data);
 
-    // 6️⃣ Handle any safeRenderDocx errors gracefully
-    if (!result.ok) {
-      console.error("❌ safeRenderDocx failed:", result.error);
+    if (!renderResult.ok) {
+      console.warn("⚠️ Safe render fallback triggered:", renderResult.error);
       return res.status(500).json({
         ok: false,
-        error: result.error || "safeRenderDocx failed",
-        warnings: result.warnings || [],
+        message: "Render failed, fallback triggered.",
+        details: renderResult,
       });
     }
 
-    // 7️⃣ Log success
-    console.log("✅ DOCX rendered successfully:", result.docxPath);
-
-    // 8️⃣ Return structured response
+    // 4️⃣ Respond success
     return res.status(200).json({
       ok: true,
       message: "✅ DOCX generated successfully.",
-      docxPath: result.docxPath,
-      tagsFound: result.tagsFound,
-      usedData: result.usedData,
-      warnings: result.warnings,
-      correlationId: result.correlationId,
+      result: renderResult,
     });
   } catch (err) {
-    console.error("💥 Uncaught error in /generate-document:", err);
+    console.error("🔥 Fatal error in generate-document:", err);
     return res.status(500).json({
       ok: false,
-      error: err.message || "Unexpected server error.",
+      error: err.message || String(err),
+      stack: err.stack || null,
     });
   }
 }
