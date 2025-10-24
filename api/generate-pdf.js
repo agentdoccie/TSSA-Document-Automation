@@ -14,36 +14,31 @@ export default async function handler(req, res) {
   try {
     const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body;
 
-    // Load DOCX template (placed in /templates/CommonCarryDeclaration.docx)
+    // Load DOCX template
     const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
     const content = fs.readFileSync(templatePath, "binary");
 
     const zip = new PizZip(content);
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
 
-    // Replace placeholders with submitted values
+    // Render placeholders
     doc.render({
       FULL_NAME: fullName,
       WITNESS_1_NAME: witness1Name,
       WITNESS_1_EMAIL: witness1Email,
       WITNESS_2_NAME: witness2Name,
       WITNESS_2_EMAIL: witness2Email,
-      SIGNATURE_DATE: new Date().toLocaleDateString(),
     });
 
-    // Generate DOCX buffer
+    // Create the personalized .docx
     const buffer = doc.getZip().generate({ type: "nodebuffer" });
+    const tempDocxPath = path.join("/tmp", `${fullName.replace(/\s+/g, "_")}_Declaration.docx`);
+    fs.writeFileSync(tempDocxPath, buffer);
 
-    // Save DOCX temporarily for conversion
-    const tempDocx = "/tmp/CommonCarryDeclaration.docx";
-    fs.writeFileSync(tempDocx, buffer);
-
-    // 🔹 Upload to CloudConvert for DOCX → PDF
+    // ✅ Upload DOCX to CloudConvert and convert to PDF
     const job = await cloudConvert.jobs.create({
       tasks: {
-        import_file: {
-          operation: "import/upload",
-        },
+        import_file: { operation: "import/upload" },
         convert: {
           operation: "convert",
           input: "import_file",
@@ -57,21 +52,22 @@ export default async function handler(req, res) {
       },
     });
 
-    const uploadTask = job.tasks.find(task => task.name === "import_file");
+    const uploadTask = job.tasks.filter(task => task.name === "import_file")[0];
     const uploadUrl = uploadTask.result.form.url;
 
-    // Upload file to CloudConvert
-    await cloudConvert.tasks.upload(uploadUrl, fs.createReadStream(tempDocx));
+    // Upload DOCX to CloudConvert
+    const fileStream = fs.createReadStream(tempDocxPath);
+    await cloudConvert.tasks.upload(uploadTask, fileStream);
 
-    // Wait for job to finish
-    const finishedJob = await cloudConvert.jobs.wait(job.id);
-    const exportTask = finishedJob.tasks.find(task => task.operation === "export/url");
+    // Wait for job completion
+    const completedJob = await cloudConvert.jobs.wait(job.id);
+    const exportTask = completedJob.tasks.filter(task => task.operation === "export/url")[0];
     const pdfUrl = exportTask.result.files[0].url;
 
-    // ✅ Return PDF URL
-    res.status(200).json({ pdfUrl });
+    // Return PDF URL
+    return res.status(200).json({ pdfUrl });
   } catch (error) {
-    console.error("❌ PDF generation error:", error);
-    res.status(500).json({ error: "Failed to generate PDF" });
+    console.error("PDF generation error:", error);
+    return res.status(500).json({ error: error.message || "PDF generation failed" });
   }
 }
