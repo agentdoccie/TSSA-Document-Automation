@@ -1,3 +1,4 @@
+// ======= /api/generate-pdf-cloudconvert.js =======
 import fs from "fs";
 import path from "path";
 import PizZip from "pizzip";
@@ -6,9 +7,18 @@ import CloudConvert from "cloudconvert";
 
 const cloudConvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY);
 
-// 🧩 Helper: auto-repair placeholder names
-function autoRepairTemplate(content) {
-  const correctTags = {
+// 🔍 Scan all {{tags}} inside the template automatically
+function extractTags(content) {
+  const regex = /{{\s*([^}\s]+)\s*}}/g;
+  const found = new Set();
+  let match;
+  while ((match = regex.exec(content))) found.add(match[1]);
+  return Array.from(found);
+}
+
+// 🧩 Automatically fix tag naming (legacy → new)
+function normalizeTags(content) {
+  const map = {
     FULL_NAME: "fullName",
     WITNESS_1_NAME: "witness1Name",
     WITNESS_1_EMAIL: "witness1Email",
@@ -16,41 +26,32 @@ function autoRepairTemplate(content) {
     WITNESS_2_EMAIL: "witness2Email",
     SIGNATURE_DATE: "signatureDate",
   };
-
-  let repairedContent = content;
-  const replacements = [];
-
-  for (const [wrongTag, rightTag] of Object.entries(correctTags)) {
-    const regex = new RegExp(`{{\\s*${wrongTag}\\s*}}`, "g");
-    if (regex.test(repairedContent)) {
-      repairedContent = repairedContent.replace(regex, `{{${rightTag}}}`);
-      replacements.push({ from: wrongTag, to: rightTag });
-    }
+  for (const [oldTag, newTag] of Object.entries(map)) {
+    const regex = new RegExp(`{{\\s*${oldTag}\\s*}}`, "g");
+    content = content.replace(regex, `{{${newTag}}}`);
   }
-
-  return { repairedContent, replacements };
+  return content;
 }
 
-// 🛡️ Helper: Safe render (never crashes)
-function safeRender(doc, data) {
+// 🛡 Safe render — auto-fill missing fields
+function safeRender(doc, data, tags) {
+  const copy = { ...data };
+  tags.forEach((t) => {
+    if (copy[t] === undefined) copy[t] = "";
+  });
+
   try {
-    doc.render(data);
-  } catch (error) {
-    if (error.name === "MultiError" && Array.isArray(error.properties?.errors)) {
-      const missing = error.properties.errors.map((e) => e.properties?.id || "unknown");
-      console.warn("⚠️ Missing variables:", missing);
-      // Fill missing keys with blanks and retry
-      missing.forEach((key) => (data[key] = data[key] || ""));
-      doc.render(data);
-      return { ok: true, missing };
-    } else {
-      throw error;
-    }
+    doc.render(copy);
+    return { ok: true, missing: [] };
+  } catch (err) {
+    console.warn("⚠️ Fallback render triggered:", err.message);
+    const missing = (err.properties?.errors || []).map((e) => e.properties?.id);
+    missing.forEach((t) => (copy[t] = ""));
+    doc.render(copy);
+    return { ok: true, missing };
   }
-  return { ok: true, missing: [] };
 }
 
-// ======= MAIN HANDLER =======
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, error: "Method Not Allowed" });
@@ -58,6 +59,18 @@ export default async function handler(req, res) {
 
   try {
     const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body;
+    const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
+
+    if (!fs.existsSync(templatePath)) {
+      return res.status(404).json({ ok: false, error: "Template not found" });
+    }
+
+    const binary = fs.readFileSync(templatePath, "binary");
+    const normalized = normalizeTags(binary.toString());
+    const tags = extractTags(normalized);
+    const zip = new PizZip(normalized, { base64: false });
+    const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+
     const data = {
       fullName,
       witness1Name,
@@ -67,30 +80,16 @@ export default async function handler(req, res) {
       signatureDate: new Date().toLocaleDateString(),
     };
 
-    const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
-    if (!fs.existsSync(templatePath)) {
-      return res.status(404).json({ ok: false, error: "Template not found" });
-    }
+    const renderResult = safeRender(doc, data, tags);
 
-    // Binary-safe read
-    const binaryContent = fs.readFileSync(templatePath, "binary");
-    const { repairedContent, replacements } = autoRepairTemplate(binaryContent.toString());
-    const zip = new PizZip(repairedContent, { base64: false });
-    const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
-
-    // 🧱 Render safely
-    const renderResult = safeRender(doc, data);
-
+    // Save DOCX
     const buffer = doc.getZip().generate({ type: "nodebuffer" });
-    const outputDocxPath = path.join(process.cwd(), "temp", "CommonCarryDeclaration_output.docx");
+    const outDir = path.join(process.cwd(), "temp");
+    const outDocx = path.join(outDir, "CommonCarryDeclaration_output.docx");
+    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir);
+    fs.writeFileSync(outDocx, buffer);
 
-    if (!fs.existsSync(path.join(process.cwd(), "temp"))) {
-      fs.mkdirSync(path.join(process.cwd(), "temp"));
-    }
-
-    fs.writeFileSync(outputDocxPath, buffer);
-
-    // 🧾 Try PDF conversion
+    // Try PDF conversion
     try {
       const job = await cloudConvert.jobs.create({
         tasks: {
@@ -108,12 +107,10 @@ export default async function handler(req, res) {
       const uploadTask = job.tasks.find((t) => t.name === "import-my-file");
       const uploadUrl = uploadTask.result.form.url;
       const formData = new FormData();
-
       for (const [key, value] of Object.entries(uploadTask.result.form.parameters)) {
         formData.append(key, value);
       }
-
-      formData.append("file", fs.createReadStream(outputDocxPath));
+      formData.append("file", fs.createReadStream(outDocx));
       await fetch(uploadUrl, { method: "POST", body: formData });
 
       const completedJob = await cloudConvert.jobs.wait(job.id);
@@ -122,24 +119,23 @@ export default async function handler(req, res) {
 
       return res.status(200).json({
         ok: true,
-        message: "✅ PDF generated successfully (self-healing mode).",
+        message: "✅ PDF generated successfully (auto-healing enabled).",
         fileUrl,
-        replacements,
+        tagsFound: tags,
         renderResult,
       });
     } catch (pdfErr) {
       console.warn("⚠️ PDF conversion failed:", pdfErr.message);
-
       return res.status(200).json({
         ok: true,
-        message: "⚙️ Fallback to DOCX — PDF conversion failed.",
+        message: "⚙️ Fallback: PDF conversion failed — DOCX generated instead.",
         fallback: "docx",
-        replacements,
+        tagsFound: tags,
         renderResult,
       });
     }
   } catch (err) {
-    console.error("❌ Generator fatal error:", err);
+    console.error("❌ Unhandled:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 }
