@@ -15,7 +15,7 @@ export const config = {
 
 import path from "path";
 import fs from "fs";
-import { safeRenderDocx } from "../../lib/safeRenderDocx.js";
+import { safeRenderDocx } from "../lib/safeRenderDocx.js";
 
 // --- Self-healing runtime safeguard ---
 process.on("uncaughtException", err => {
