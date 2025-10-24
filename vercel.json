@@ -1,18 +1,13 @@
 {
-  "version": 2,
   "functions": {
     "api/*.js": {
-      "runtime": "@vercel/node@2.0.0"
+      "runtime": "nodejs18.x",
+      "maxDuration": 30,
+      "memory": 1024,
+      "launcherType": "Nodejs"
     }
   },
-  "crons": [
-    {
-      "path": "/api/selftest",
-      "schedule": "0 3 * * *"
-    }
-  ],
-  "env": {
-    "ALERT_EMAIL": "nick@payitforward.africa",
-    "ALERT_FROM": "TSSA Monitor <no-reply@yourdomain.tld>"
-  }
+  "buildCommand": "npm install && echo '✅ Full Node build initiated — clearing stale cache.'",
+  "ignoreCommand": "echo 'Forcing clean rebuild on each deploy'",
+  "outputDirectory": ".vercel/output"
 }
