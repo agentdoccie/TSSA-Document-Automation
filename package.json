@@ -11,6 +11,8 @@
     "pizzip": "3.1.4",
     "docx": "8.5.0",
     "cloudconvert": "2.3.0",
-    "pdf-lib": "1.17.1"
+    "pdf-lib": "1.17.1",
+    "node-fetch": "3.3.2",
+    "form-data": "4.0.0"
   }
 }
