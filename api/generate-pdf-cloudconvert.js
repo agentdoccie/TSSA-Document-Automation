@@ -1,12 +1,9 @@
-// ======= /api/generate-pdf-cloudconvert.js =======
-
 import fs from "fs";
 import path from "path";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import CloudConvert from "cloudconvert";
 
-// Initialize CloudConvert client
 const cloudConvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY);
 
 // 🧩 Helper: auto-repair placeholder names
@@ -34,6 +31,25 @@ function autoRepairTemplate(content) {
   return { repairedContent, replacements };
 }
 
+// 🛡️ Helper: Safe render (never crashes)
+function safeRender(doc, data) {
+  try {
+    doc.render(data);
+  } catch (error) {
+    if (error.name === "MultiError" && Array.isArray(error.properties?.errors)) {
+      const missing = error.properties.errors.map((e) => e.properties?.id || "unknown");
+      console.warn("⚠️ Missing variables:", missing);
+      // Fill missing keys with blanks and retry
+      missing.forEach((key) => (data[key] = data[key] || ""));
+      doc.render(data);
+      return { ok: true, missing };
+    } else {
+      throw error;
+    }
+  }
+  return { ok: true, missing: [] };
+}
+
 // ======= MAIN HANDLER =======
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -42,35 +58,29 @@ export default async function handler(req, res) {
 
   try {
     const { fullName, witness1Name, witness1Email, witness2Name, witness2Email } = req.body;
-
-    // 🧠 1. Load template safely
-    const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
-    if (!fs.existsSync(templatePath)) {
-      return res.status(404).json({ ok: false, error: "Template not found" });
-    }
-
-    // ✅ Binary-safe read (no corruption)
-    let binaryContent = fs.readFileSync(templatePath, "binary");
-
-    // 🛠 2. Auto-repair placeholders on a text version
-    let textVersion = binaryContent.toString();
-    const { repairedContent, replacements } = autoRepairTemplate(textVersion);
-
-    // ✅ Convert repaired text back to binary and zip
-    const zip = new PizZip(repairedContent, { base64: false });
-
-    // 🧱 3. Render DOCX with user data
-    const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
-    doc.render({
+    const data = {
       fullName,
       witness1Name,
       witness1Email,
       witness2Name,
       witness2Email,
       signatureDate: new Date().toLocaleDateString(),
-    });
+    };
 
-    // 🗂 Save rendered DOCX
+    const templatePath = path.join(process.cwd(), "templates", "CommonCarryDeclaration.docx");
+    if (!fs.existsSync(templatePath)) {
+      return res.status(404).json({ ok: false, error: "Template not found" });
+    }
+
+    // Binary-safe read
+    const binaryContent = fs.readFileSync(templatePath, "binary");
+    const { repairedContent, replacements } = autoRepairTemplate(binaryContent.toString());
+    const zip = new PizZip(repairedContent, { base64: false });
+    const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+
+    // 🧱 Render safely
+    const renderResult = safeRender(doc, data);
+
     const buffer = doc.getZip().generate({ type: "nodebuffer" });
     const outputDocxPath = path.join(process.cwd(), "temp", "CommonCarryDeclaration_output.docx");
 
@@ -80,7 +90,7 @@ export default async function handler(req, res) {
 
     fs.writeFileSync(outputDocxPath, buffer);
 
-    // 🧾 4. Try CloudConvert PDF conversion
+    // 🧾 Try PDF conversion
     try {
       const job = await cloudConvert.jobs.create({
         tasks: {
@@ -112,22 +122,24 @@ export default async function handler(req, res) {
 
       return res.status(200).json({
         ok: true,
-        message: "✅ PDF generated successfully (auto-repaired).",
+        message: "✅ PDF generated successfully (self-healing mode).",
         fileUrl,
         replacements,
+        renderResult,
       });
     } catch (pdfErr) {
-      console.warn("⚠️ PDF conversion failed, fallback to DOCX only:", pdfErr.message);
+      console.warn("⚠️ PDF conversion failed:", pdfErr.message);
 
       return res.status(200).json({
         ok: true,
-        message: "⚠️ PDF conversion failed — fallback to DOCX only.",
+        message: "⚙️ Fallback to DOCX — PDF conversion failed.",
         fallback: "docx",
         replacements,
+        renderResult,
       });
     }
   } catch (err) {
-    console.error("❌ Unhandled generator error:", err);
+    console.error("❌ Generator fatal error:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 }
