@@ -4,7 +4,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "validate-templates": "node scripts/validate-templates.mjs"
   },
   "dependencies": {
     "docxtemplater": "3.36.0",
