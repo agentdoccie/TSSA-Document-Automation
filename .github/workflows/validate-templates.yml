@@ -22,25 +22,25 @@ jobs:
   validate:
     name: Validate DOCX Templates
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Run template validation
         run: npm run validate-templates
-      
+
       - name: Report validation results
         if: failure()
         run: |
-          echo "::error::Template validation failed. Please review the errors above."
-          echo "Templates may have formatting issues or missing schema files."
+          echo "::error::Template validation failed."
+          echo "Please review the errors above."
