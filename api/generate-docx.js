@@ -1,134 +1,86 @@
-// ✅ FINAL FIXED VERSION — Works on Vercel with Node.js runtime (no req.json error)
+// api/generate-docx.js
+// Safer generator: validates template placeholders before rendering with docxtemplater.
+// Place this file in api/ (replacing or alongside your existing handler).
+// Exports a default function compatible with Vercel serverless handlers (req, res).
 
-import { Document, Packer, Paragraph, TextRun } from "docx";
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import PizZip from 'pizzip';
+import Docxtemplater from 'docxtemplater';
+import { validateDataAgainstTemplate } from '../lib/template-validator.js';
 
-export const config = { runtime: "nodejs" };
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function makeExamplePayload(tags) {
+  const example = {};
+  for (const t of tags) {
+    example[t] = '<value>';
+  }
+  return example;
+}
+
+function validationErrorResponse(res, missing, tags) {
+  return res.status(422).json({
+    error: 'Template validation failed: missing placeholders',
+    missing,
+    requiredPlaceholders: tags,
+    examplePayload: makeExamplePayload(tags),
+    message: `Template requires ${tags.length} placeholders; ${missing.length} are missing.`,
+  });
+}
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== "POST") {
-      res.status(405).json({ error: "Method not allowed" });
-      return;
+    // Expect JSON body with { templateName, data }
+    const { templateName, data } = req.body || {};
+    if (!templateName) {
+      return res.status(400).json({ error: 'Missing templateName in request body' });
     }
 
-    // ✅ FIX: manually parse request body
-    const buffers = [];
-    for await (const chunk of req) {
-      buffers.push(chunk);
-    }
-    const data = JSON.parse(Buffer.concat(buffers).toString());
-
-    const {
-      fullName = "",
-      witness1Name = "",
-      witness1Email = "",
-      witness2Name = "",
-      witness2Email = "",
-      signatureDate = new Date().toLocaleDateString(),
-    } = data;
-
-    if (!fullName || !witness1Name || !witness2Name) {
-      res.status(400).json({ error: "Missing required fields" });
-      return;
+    const templatePath = path.join(__dirname, '..', 'templates', templateName);
+    if (!fs.existsSync(templatePath)) {
+      return res.status(404).json({ error: `Template not found: ${templateName}` });
     }
 
-    const safe = (t) => (typeof t === "string" ? t.trim() : "");
+    const buffer = fs.readFileSync(templatePath);
 
-    const doc = new Document({
-      sections: [
-        {
-          children: [
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: "COMMON CARRY DECLARATION",
-                  bold: true,
-                  size: 28,
-                }),
-              ],
-              alignment: "center",
-              spacing: { after: 400 },
-            }),
+    // Validate that provided data covers all placeholders.
+    let validation;
+    try {
+      validation = validateDataAgainstTemplate(buffer, data || {});
+    } catch (vErr) {
+      console.error('Template validation failure', vErr);
+      return res.status(500).json({ error: 'Failed to read template tags', message: String(vErr.message) });
+    }
 
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: `I, ${safe(fullName)}, being of sound mind and body, do hereby declare and record my unalienable right to keep and bear arms — to Common Carry — as guaranteed by Natural Law and reaffirmed in Public Law.`,
-                  size: 24,
-                }),
-              ],
-              spacing: { after: 300 },
-            }),
+    const { tags, missing } = validation;
+    if (missing.length > 0) {
+      return validationErrorResponse(res, missing, tags);
+    }
 
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: "This Declaration stands as my public record of intent to live peaceably, to defend life, liberty, and property, and to uphold the Public Law of the Land.",
-                  size: 24,
-                }),
-              ],
-              spacing: { after: 300 },
-            }),
+    // All placeholders present -> render the docx
+    try {
+      const zip = new PizZip(buffer);
+      const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+      doc.setData(data || {});
+      doc.render();
+      const outBuffer = doc.getZip().generate({ type: 'nodebuffer' });
 
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: `Signed and declared this day of ${safe(signatureDate)}.`,
-                  size: 24,
-                }),
-              ],
-              spacing: { after: 400 },
-            }),
-
-            new Paragraph({
-              children: [new TextRun({ text: "Witness 1:", bold: true, size: 24 })],
-            }),
-            new Paragraph({ children: [new TextRun({ text: `Name: ${safe(witness1Name)}`, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: `Email: ${safe(witness1Email)}`, size: 24 })] }),
-            new Paragraph({
-              children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
-              spacing: { after: 200 },
-            }),
-
-            new Paragraph({
-              children: [new TextRun({ text: "Witness 2:", bold: true, size: 24 })],
-            }),
-            new Paragraph({ children: [new TextRun({ text: `Name: ${safe(witness2Name)}`, size: 24 })] }),
-            new Paragraph({ children: [new TextRun({ text: `Email: ${safe(witness2Email)}`, size: 24 })] }),
-            new Paragraph({
-              children: [new TextRun({ text: "Autograph: _________________________", size: 24 })],
-              spacing: { after: 400 },
-            }),
-
-            new Paragraph({
-              children: [
-                new TextRun({
-                  text: "Generated automatically by the TSSA Document Automation System",
-                  italics: true,
-                  size: 20,
-                }),
-              ],
-              alignment: "center",
-            }),
-          ],
-        },
-      ],
-    });
-
-    const buffer = await Packer.toBuffer(doc);
-
-    // ✅ send as downloadable DOCX
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${safe(fullName)}_Common_Carry_Declaration.docx"`
-    );
-    res.status(200).send(buffer);
+      const filename = `${path.basename(templateName).replace(/\.[^.]+$/, '')}-output.docx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(outBuffer);
+    } catch (renderErr) {
+      // Docxtemplater sometimes throws an object with .properties
+      console.error('Docxtemplater render error', renderErr);
+      const message = renderErr && renderErr.message ? renderErr.message : String(renderErr);
+      const details = renderErr && renderErr.properties ? renderErr.properties : undefined;
+      return res.status(500).json({ error: 'Failed to render template', message, details });
+    }
   } catch (err) {
-    console.error("Error generating document:", err);
-    res.status(500).json({ error: err.message });
+    console.error('generate-docx unexpected error', err);
+    return res.status(500).json({ error: 'Internal server error', message: err?.message ?? String(err) });
   }
 }
