@@ -1,13 +1,11 @@
 {
   "functions": {
     "api/*.js": {
-      "runtime": "nodejs18.x",
+      "runtime": "@vercel/node@2.0.0",
       "maxDuration": 30,
-      "memory": 1024,
-      "launcherType": "Nodejs"
+      "memory": 1024
     }
   },
-  "buildCommand": "npm install && echo '✅ Full Node build initiated — clearing stale cache.'",
-  "ignoreCommand": "echo 'Forcing clean rebuild on each deploy'",
-  "outputDirectory": ".vercel/output"
+  "buildCommand": "npm install",
+  "outputDirectory": "public"
 }
