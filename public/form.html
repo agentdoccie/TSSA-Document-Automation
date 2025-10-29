@@ -106,7 +106,7 @@
 <body>
   <div class="container">
     <h1>📄 TSSA Document Generator</h1>
-    <p class="subtitle">Fill in the information below to generate your document</p>
+    <p class="subtitle">Fill in the information below to generate your lawful document</p>
 
     <form id="doc-form">
       <div>
@@ -124,6 +124,11 @@
       <div>
         <label for="SIGNATURE_DATE">Signature Date *</label>
         <input id="SIGNATURE_DATE" placeholder="28th October 2025" required />
+      </div>
+
+      <div>
+        <label for="USER_EMAIL">Your Email *</label>
+        <input id="USER_EMAIL" type="email" placeholder="you@example.com" required />
       </div>
 
       <div class="row">
@@ -182,18 +187,19 @@
       const submitBtn = document.getElementById('submit-btn');
       submitBtn.disabled = true;
       submitBtn.textContent = 'Generating...';
-      showStatus('Generating document, please wait...', 'loading');
+      showStatus('Generating document and sending email, please wait...', 'loading');
 
       const payload = {
-        templates: [document.getElementById('template').value],
+        templates: [document.getElementById("template").value],
         data: {
-          FULL_NAME: document.getElementById('FULL_NAME').value,
-          SIGNATURE_DATE: document.getElementById('SIGNATURE_DATE').value,
-          WITNESS_1_NAME: document.getElementById('WITNESS_1_NAME').value,
-          WITNESS_1_EMAIL: document.getElementById('WITNESS_1_EMAIL').value,
-          WITNESS_2_NAME: document.getElementById('WITNESS_2_NAME').value,
-          WITNESS_2_EMAIL: document.getElementById('WITNESS_2_EMAIL').value
-        }
+          FULL_NAME: document.getElementById("FULL_NAME").value,
+          SIGNATURE_DATE: document.getElementById("SIGNATURE_DATE").value,
+          USER_EMAIL: document.getElementById("USER_EMAIL").value,
+          WITNESS_1_NAME: document.getElementById("WITNESS_1_NAME").value,
+          WITNESS_1_EMAIL: document.getElementById("WITNESS_1_EMAIL").value,
+          WITNESS_2_NAME: document.getElementById("WITNESS_2_NAME").value,
+          WITNESS_2_EMAIL: document.getElementById("WITNESS_2_EMAIL").value,
+        },
       };
 
       try {
@@ -205,15 +211,22 @@
 
         if (!res.ok) {
           const text = await res.text();
-          showStatus(`Generation failed (${res.status}). ${text.slice(0, 200)}`, 'error');
+          let errorMsg = `Generation failed (${res.status}).`;
+          try {
+            const json = JSON.parse(text);
+            errorMsg = json.error || json.detail || errorMsg;
+          } catch {
+            errorMsg = text.slice(0, 200) || errorMsg;
+          }
+          showStatus(errorMsg, 'error');
           return;
         }
 
         const blob = await res.blob();
         await downloadBlob(blob, 'output.zip');
-        showStatus('✅ Success! Your document has been downloaded as output.zip', 'success');
+        showStatus('✅ Success! Your document has been downloaded and emailed to ' + payload.data.USER_EMAIL, 'success');
 
-        setTimeout(() => { document.getElementById('doc-form').reset(); hideStatus(); }, 4000);
+        setTimeout(() => { document.getElementById('doc-form').reset(); hideStatus(); }, 6000);
       } catch (err) {
         showStatus(`Request error: ${err?.message || err}`, 'error');
       } finally {
