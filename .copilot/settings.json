@@ -1,0 +1,12 @@
+{
+  "project": "TSSA-Document-Automation",
+  "preset": "stability",
+  "description": "Deterministic factual engineering mode for TSSA Document Automation",
+  "rules": {
+    "return_full_files": true,
+    "avoid_partial_diffs": true,
+    "align_with": ["Node.js 22+", "ESM syntax", "Docxtemplater standards"],
+    "no_invention": true,
+    "flag_uncertainty": true
+  }
+}

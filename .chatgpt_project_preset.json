@@ -1,0 +1,15 @@
+{
+  "project": "TSSA-Document-Automation",
+  "mode": "deterministic_factual_engineering",
+  "description": "ChatGPT deterministic preset matching Copilot stability profile for the TSSA Document Automation project.",
+  "rules": {
+    "return_full_files": true,
+    "avoid_partial_diffs": true,
+    "align_with": ["Node.js 22+", "ESM syntax", "Docxtemplater standards"],
+    "no_invention": true,
+    "flag_uncertainty": true,
+    "structure_integrity_priority": true,
+    "auto_explain_conflicts": true,
+    "full_context_persistence": true
+  }
+}
